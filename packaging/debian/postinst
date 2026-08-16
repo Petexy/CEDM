@@ -1,0 +1,108 @@
+#!/bin/sh
+
+# Provision what the packaged files describe, and — on a first install only —
+# make this the machine's display manager.
+#
+# Enabling on install is what every distribution's display managers do, and it
+# is the one kind of package where it is right: a display manager that installs
+# without being enabled has done nothing at all, and the machine still boots to
+# whatever it booted to before.
+#
+# What this will not do is take the login screen away from something else. If
+# another display manager already holds `display-manager.service` — and only
+# one unit can, which is what that alias means — this says so and leaves it
+# alone. Choosing between two installed display managers is an administrator's
+# decision.
+#
+# It also never starts the unit, and an upgrade never re-enables it. Starting a
+# display manager takes the seat the signed-in user is on, and an administrator
+# who disabled this unit meant it.
+
+set -e
+
+# Overridable so the guard below can be exercised without a real /etc.
+CEDM_DISPLAY_MANAGER_LINK="${CEDM_DISPLAY_MANAGER_LINK:-/etc/systemd/system/display-manager.service}"
+
+cedm_enable() {
+    # Only where systemd is running this machine. A package unpacked into a
+    # chroot or an image has no unit state to change here.
+    [ -d /run/systemd/system ] || return 0
+
+    if [ -L "$CEDM_DISPLAY_MANAGER_LINK" ]; then
+        current="$(readlink -f "$CEDM_DISPLAY_MANAGER_LINK" 2>/dev/null || true)"
+        case "$current" in
+            */cedm.service)
+                return 0
+                ;;
+            '')
+                # A dangling link left by a display manager that has been
+                # removed. Nothing is using it, so it is ours to claim.
+                ;;
+            *)
+                cat >&2 <<EOF
+cedm: ${current##*/} is already this machine's display manager, so
+cedm: cedm.service has been left disabled. To switch to it:
+cedm:     systemctl disable ${current##*/}
+cedm:     systemctl enable cedm.service
+EOF
+                return 0
+                ;;
+        esac
+    fi
+
+    # deb-systemd-helper where it exists, because it is what records the unit's
+    # enablement state for a later purge; plain systemctl otherwise.
+    if command -v deb-systemd-helper >/dev/null 2>&1; then
+        deb-systemd-helper enable cedm.service >/dev/null 2>&1 || true
+    fi
+    if ! systemctl enable cedm.service >/dev/null 2>&1; then
+        cat >&2 <<'EOF'
+cedm: could not enable cedm.service automatically. To do it by hand:
+cedm:     systemctl enable cedm.service
+EOF
+        return 0
+    fi
+    echo "cedm: enabled cedm.service; it is this machine's login screen from the next boot." >&2
+
+    # An enabled display manager still does nothing on a machine that does not
+    # boot into a graphical target: `graphical.target` is what wants
+    # `display-manager.service`, and `multi-user.target` does not.
+    target="$(systemctl get-default 2>/dev/null || true)"
+    if [ -n "$target" ] && [ "$target" != graphical.target ]; then
+        cat >&2 <<EOF
+cedm: this machine boots to $target, which starts no display manager.
+cedm:     systemctl set-default graphical.target
+EOF
+    fi
+}
+
+if [ "$1" = configure ]; then
+    if [ -x /usr/bin/systemd-sysusers ]; then
+        systemd-sysusers \
+            /usr/lib/sysusers.d/cedm.conf || true
+    fi
+    if [ -x /usr/bin/systemd-tmpfiles ]; then
+        systemd-tmpfiles --create \
+            /usr/lib/tmpfiles.d/cedm.conf || true
+    fi
+
+    # The controller rule only matters to a pad that is already plugged in;
+    # anything connected later is matched as it arrives.
+    if [ -d /run/udev ] && command -v udevadm >/dev/null 2>&1; then
+        udevadm control --reload-rules >/dev/null 2>&1 || true
+        udevadm trigger --subsystem-match=hidraw >/dev/null 2>&1 || true
+    fi
+
+    if [ -d /run/systemd/system ]; then
+        systemctl daemon-reload >/dev/null 2>&1 || true
+    fi
+
+    # `$2` is the previously configured version, and is empty on a first
+    # install. An upgrade must not re-enable a unit the administrator turned
+    # off.
+    if [ -z "$2" ]; then
+        cedm_enable
+    fi
+fi
+
+exit 0

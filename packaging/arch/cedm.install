@@ -1,0 +1,93 @@
+# What pacman runs around the cedm package.
+#
+# This enables the unit on a first install, which is a deliberate departure
+# from Arch's packaging standards — those say a package must not enable the
+# services it ships, and for almost everything that is right. A display manager
+# is the exception every distribution ends up making: it is the one kind of
+# package whose entire purpose is to be the thing the machine boots into, and
+# one that installs without being enabled has done nothing at all. Debian's
+# display managers enable themselves from `postinst`, Fedora's from a preset.
+#
+# What it will not do is take the machine's login screen away from something
+# else. If another display manager already holds `display-manager.service` —
+# and only one unit can, which is what that alias means — this says so and
+# leaves it alone. Choosing between two installed display managers is an
+# administrator's decision, and a package that quietly made it would be
+# deciding where the next boot goes.
+#
+# It also never starts the unit. Starting a display manager takes the seat that
+# whoever is reading this is signed in on, and no package should end a user's
+# session because it was installed.
+
+# Overridable so the guard below can be exercised without a real /etc.
+_cedm_display_manager_link="${_cedm_display_manager_link:-/etc/systemd/system/display-manager.service}"
+
+_cedm_enable() {
+    # Only where systemd is running this machine. A package installed into a
+    # chroot or an image has no unit state to change here, and `systemctl`
+    # would either fail or edit the wrong machine's configuration.
+    [ -d /run/systemd/system ] || return 0
+
+    if [ -L "$_cedm_display_manager_link" ]; then
+        _cedm_current="$(readlink -f "$_cedm_display_manager_link" 2>/dev/null || true)"
+        case "$_cedm_current" in
+            */cedm.service)
+                return 0
+                ;;
+            '')
+                # A dangling link, left by a display manager that has been
+                # removed. Nothing is using it, so it is ours to claim.
+                ;;
+            *)
+                cat >&2 <<EOF
+cedm: ${_cedm_current##*/} is already this machine's display manager, so
+cedm: cedm.service has been left disabled. To switch to it:
+cedm:     systemctl disable ${_cedm_current##*/}
+cedm:     systemctl enable cedm.service
+EOF
+                return 0
+                ;;
+        esac
+    fi
+
+    if ! systemctl enable cedm.service >/dev/null 2>&1; then
+        cat >&2 <<'EOF'
+cedm: could not enable cedm.service automatically. To do it by hand:
+cedm:     systemctl enable cedm.service
+EOF
+        return 0
+    fi
+    echo "cedm: enabled cedm.service; it is this machine's login screen from the next boot." >&2
+
+    # An enabled display manager still does nothing on a machine that does not
+    # boot into a graphical target: `graphical.target` is what wants
+    # `display-manager.service`, and `multi-user.target` does not.
+    _cedm_target="$(systemctl get-default 2>/dev/null || true)"
+    if [ -n "$_cedm_target" ] && [ "$_cedm_target" != graphical.target ]; then
+        cat >&2 <<EOF
+cedm: this machine boots to $_cedm_target, which starts no display manager.
+cedm:     systemctl set-default graphical.target
+EOF
+    fi
+}
+
+post_install() {
+    _cedm_enable
+}
+
+post_upgrade() {
+    # Deliberately nothing. An administrator who disabled this unit meant it,
+    # and an upgrade is not a new decision to enable it again.
+    :
+}
+
+pre_remove() {
+    # Drop the display-manager alias so the next boot goes to whichever login
+    # screen is still installed, rather than to a unit whose binary is about to
+    # be removed. The running greeter is left alone: it owns the seat the
+    # signed-in user's session is on, and stopping it here would end that
+    # session and everything in it.
+    if [ -d /run/systemd/system ]; then
+        systemctl --quiet disable cedm.service >/dev/null 2>&1 || true
+    fi
+}

@@ -1,0 +1,53 @@
+# greetd's configuration for Console Experience Desktop Manager.
+#
+# This file belongs to CEDM's own service unit, which passes it to greetd
+# explicitly. It is deliberately not /etc/greetd/config.toml: a machine may
+# have greetd installed for something else, and enabling CEDM must not rewrite
+# that machine's other greeter.
+#
+# What lives here is the seat and the greeter session. Everything the greeter
+# itself decides — which sessions, whose account is remembered, which machine
+# actions are offered — is in config.toml beside this file.
+
+[general]
+# greetd's own profile sourcing, off — and replaced rather than dropped.
+#
+# With it on, greetd runs the greeter and every session under `/bin/sh -l`.
+# That shell sources /etc/profile, and greetd has already pointed the session's
+# stdout and stderr at the login VT, so whatever a distribution's
+# /etc/profile.d fragments have to say is printed across the screen the greeter
+# just drew. On the machine this was found on that was gpm's, saying
+# `disable-paste: cannot open mouse connection`, twice per sign-in.
+#
+# No other display manager shows a user that. SDDM sources the profile too, in
+# /usr/share/sddm/scripts/wayland-session, but points the session's output at a
+# log file first; GDM points it at the journal. CEDM does the same in
+# /usr/bin/cedm-session and /usr/bin/cedm-greeter-session, which is why this is
+# `false` here: the sourcing has moved, it has not gone.
+#
+# It could not simply be dropped. /etc/profile.d is where a distribution puts
+# the XDG_DATA_DIRS entry that makes Flatpak applications appear in a menu, the
+# LANG a session starts in, and a handful of PATH additions. Silencing one line
+# by discarding all of that would be the worse bug.
+source_profile = false
+
+[terminal]
+# Keep the greeter and the session on the same terminal. greetd starts the
+# authenticated session on the terminal named here, so a greeter on VT 1 hands
+# over to a session on VT 1 and the display is never switched away and back: a
+# VT switch costs its own mode set and its own console frame, on top of the
+# gap that already exists while no process holds the DRM master.
+#
+# VT 1 is also why the unit conflicts with getty@tty1.service.
+vt = 1
+switch = true
+
+[default_session]
+# The greeter, under the compositor that gives it a seat. See
+# /usr/bin/cedm-greeter-session for what that wrapper sets and why.
+command = "/usr/bin/cedm-greeter-session"
+
+# An account with no privileges, no login shell and nothing in it. The greeter
+# never authenticates anybody — greetd and PAM do — so this account exists only
+# to own a window and a file of remembered choices.
+user = "cedm-greeter"

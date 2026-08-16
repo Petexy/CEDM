@@ -1,0 +1,24 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: Console Experience Desktop Manager
+Source: https://github.com/petexy/ConsoleExperienceDesktopManager
+
+Files: *
+Copyright: 2026 Piotr Lewandowski and contributors
+License: GPL-3.0-only
+ The complete GNU General Public License version 3 is available in
+ /usr/share/common-licenses/GPL-3 on Debian systems.
+
+Files: assets/fonts/*
+Copyright: Christian Robertson
+License: Apache-2.0
+ The complete Apache License version 2.0 is available in
+ /usr/share/common-licenses/Apache-2.0 on Debian systems.
+
+Files: assets/glyphs/*
+Copyright: 2026 Piotr Lewandowski and contributors
+Comment: Ten of these are LineXinBar's own marks, carried over unchanged so that
+ the greeter and the shell it hands over to do not put two different power
+ symbols in front of the same user four seconds apart.
+License: GPL-3.0-only
+ The complete GNU General Public License version 3 is available in
+ /usr/share/common-licenses/GPL-3 on Debian systems.

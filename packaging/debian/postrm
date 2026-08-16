@@ -1,0 +1,21 @@
+#!/bin/sh
+
+set -e
+
+if [ -d /run/systemd/system ]; then
+    systemctl daemon-reload >/dev/null 2>&1 || true
+fi
+
+if [ "$1" = purge ]; then
+    # Remembered accounts and session choices, and the directory the broker
+    # publishes accent state into. Purge means purge; an ordinary removal
+    # leaves both, because reinstalling should not cost a user the profile
+    # their console came up on.
+    rm -rf /var/lib/console-experience-desktop-manager
+    # dpkg removes the conffile itself. The directory is only ours to take back
+    # once it is empty, which it will not be if an administrator has left a
+    # policy file in it.
+    rmdir /etc/cedm 2>/dev/null || true
+fi
+
+exit 0

@@ -1,0 +1,10 @@
+Source: cedm
+Section: x11
+Priority: optional
+Maintainer: Piotr Lewandowski <piotr.petexiness@gmail.com>
+Standards-Version: 4.7.4
+Rules-Requires-Root: no
+
+Package: cedm
+Architecture: linux-any
+Description: controller-first graphical display manager

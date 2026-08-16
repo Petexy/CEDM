@@ -1,0 +1,33 @@
+# The second-generation Steam Controller, made readable to the login screen.
+#
+# That pad has no kernel gamepad driver: `hid-steam` claims the older
+# controllers and the Deck, so this one falls through to `hid-generic` and never
+# grows a joystick node. CEDM therefore reads its input report straight from
+# hidraw — see src/steam_hid.rs for why that is the only source that survives
+# both lizard mode and Steam having claimed the pad.
+#
+# hidraw nodes are 0600 root:root by default, and nothing in systemd's own
+# uaccess rules tags them, so without this file the one controller the greeter
+# was written for is the one it cannot read.
+#
+# `uaccess` rather than a group: it grants the device to whoever holds the
+# active session on the seat. That is the greeter while the greeter is up and
+# the user once they have signed in, and at no point is it every account on the
+# machine. Numbered below 73 so the ACL is applied by 73-seat-late.rules, which
+# is what actually acts on the tag.
+#
+# Read-only access is all CEDM wants; the mode below is the conventional one for
+# a pad, and writing feature reports — turning lizard mode off — remains Steam's
+# business and not this greeter's.
+
+ACTION!="add|change", GOTO="cedm_steam_controller_end"
+
+# Wired, and the wireless dongle: Valve's vendor ID on the USB parent.
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", ATTRS{idVendor}=="28de", MODE="0660", TAG+="uaccess"
+
+# The same pad over Bluetooth, which has no USB parent to carry idVendor. The
+# vendor is in the HID device's own kernel name, uppercase, between the bus
+# number and the product.
+KERNEL=="hidraw*", SUBSYSTEM=="hidraw", KERNELS=="*28DE:*", MODE="0660", TAG+="uaccess"
+
+LABEL="cedm_steam_controller_end"

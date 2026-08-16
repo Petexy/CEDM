@@ -1,0 +1,175 @@
+#!/bin/sh
+
+# The authenticated session, as CEDM asks greetd to start it.
+#
+# It exists for one reason: greetd hands a session the login VT as its stdin,
+# stdout and stderr. Anything the session or its profile prints therefore lands
+# on the screen the greeter just drew, and stays there — under the next
+# compositor, through the hand-over, and on into a shutdown, because nothing
+# repaints a console nobody is writing to.
+#
+# No other display manager does that to a user. SDDM points a session's output
+# at a log file before starting it (`SessionLogFile`, and its wayland-session
+# wrapper sources the profile after that redirection); GDM points it at the
+# journal. This wrapper is CEDM's version of the same idea, and the journal is
+# the destination: a session that fails to start still has to be debuggable,
+# and `journalctl -t cedm-session` is a better place to look for the reason
+# than a console frame that the next compositor has already painted over.
+#
+# The profile sourcing that greetd would have done is here rather than gone.
+# `source_profile = false` in greetd.toml turns off greetd's copy — it can only
+# do it through a login shell writing to that same VT — and this does it after
+# the redirect instead. Dropping it outright was not an option: /etc/profile.d
+# is where a distribution puts the XDG_DATA_DIRS entry that makes Flatpak
+# applications appear in a menu, the LANG a session starts in, and several PATH
+# additions.
+#
+# Usage is the session's own argv, which CEDM takes from the desktop entry and
+# never builds by hand:
+#
+#     cedm-session /usr/bin/startplasma-wayland
+
+set -eu
+
+if [ "$#" -eq 0 ]; then
+    echo "cedm-session: no session command given" >&2
+    exit 2
+fi
+
+# Re-exec through systemd-cat so everything below this line — the profile, the
+# session, and anything either of them starts — is journal output rather than
+# console output. systemd-cat execs rather than forks, so this costs the
+# session no extra process and leaves it the same PID greetd is waiting on.
+#
+# stdin is deliberately left alone. It is the VT, and it is what makes this the
+# session's controlling terminal; the session does not read from it, and taking
+# it away changes who owns the console.
+#
+# Where systemd-cat is not available the session keeps greetd's VT stdio, which
+# is the behaviour every version before this one had. Losing the redirect is
+# worth less than losing the output.
+# Re-entered through `/bin/sh "$0"` rather than through `$0` itself: this file
+# is only ever reached because something executed it, but `exec` that fails is
+# a shell that exits, and a login screen must not be able to lose a session to
+# a missing executable bit. The interpreter named in the shebang can always run
+# it.
+if [ "${CEDM_SESSION_LOGGED-}" != 1 ] && command -v systemd-cat >/dev/null 2>&1; then
+    CEDM_SESSION_LOGGED=1
+    export CEDM_SESSION_LOGGED
+    exec systemd-cat --identifier=cedm-session -- /bin/sh "$0" "$@"
+fi
+unset CEDM_SESSION_LOGGED
+
+# /etc/profile is written for an interactive login shell, not for `set -eu`: an
+# unset variable or a non-zero return inside one of its fragments is ordinary
+# there and fatal here. Both are relaxed across the sourcing and restored after
+# it, so a distribution's profile cannot stop a user signing in.
+set +eu
+[ -r /etc/profile ] && . /etc/profile
+[ -n "${HOME-}" ] && [ -r "$HOME/.profile" ] && . "$HOME/.profile"
+set -eu
+
+# How this account's desktop is set up, published for the login screen: once
+# here, and again from the shell whenever a setting changes.
+#
+# The greeter runs as an account of its own and cannot read a home directory —
+# most are 0700 — so it had no way to see that this user's LineXinBar is set to
+# red, and drew every login screen in the default purple. This is the copy it is
+# allowed to read: written here, by the user, into a directory whose files the
+# greeter believes only while they belong to the account they are named for. The
+# accent is one of two things in it; the other is what each display is set to,
+# which is how the login screen can come up in the modes and the dynamic range
+# the session is about to.
+#
+# This is the floor rather than the whole story. LineXinBar runs the same
+# command at the end of the function that writes its settings, so a setting
+# changed at lunchtime is published at lunchtime and a user who changes their
+# accent and signs straight out meets the colour they just chose. What this line
+# covers is everything before and around that: the first sign-in of a new
+# account, a session that changes nothing, and a desktop that has never heard of
+# any of this. A shell too old to say anything simply leaves the copy as it was
+# at sign-in, which is where every published thing about an account used to be.
+#
+# Beside this script rather than off PATH: a package that installs both
+# somewhere other than /usr/bin stays consistent, exactly as the launcher this
+# script was found through does.
+greeter="$(dirname -- "$0")/cedm"
+[ -x "$greeter" ] || greeter=cedm
+
+publish_look() {
+    command -v "$greeter" >/dev/null 2>&1 || return 0
+    "$greeter" --publish-look ||
+        echo "cedm-session: could not publish this account's look for the login screen." >&2
+}
+publish_look || true
+
+# And once more, as soon as this account has a sound server to be asked.
+#
+# The publish above cannot answer the one question the login screen is least
+# able to work out for itself. Which device the machine plays through, and how
+# loud, belong to the sound server and to no file — a desktop that kept its own
+# copy of either would be a second opinion about them at every login — and at
+# the moment the line above runs there is no sound server for this account,
+# because the session that starts one is the thing about to be exec'd below.
+#
+# Without this the greeter is reduced to guessing, which is the failure it was
+# written after: a machine with several cards in it offers a long list of
+# outputs that all open successfully, and only one of them is the one somebody
+# is listening to. LineXinBar publishes this properly — when the device is
+# changed, and again on its way out, which is the only honest moment to read a
+# volume — but that is the best case refining itself. This is the floor, and it
+# is what makes the login screen's sound work behind *any* session: Plasma, a
+# desktop that has never heard of CEDM, or a LineXinBar too old to say anything.
+#
+# Bounded, and short-lived on purpose. A login screen has no business keeping a
+# process inside somebody's session, and this is not one: it is not a watcher of
+# anything, it waits for a server to exist, publishes once and is gone — usually
+# within a second or two of the desktop appearing. A machine that never starts
+# one is not left carrying it, and the copy already written stays as it was.
+publish_look_when_the_sound_server_answers() {
+    command -v "$greeter" >/dev/null 2>&1 || return 0
+    # Nothing to wait for where there is no pactl to ask with. The publish above
+    # has already written everything else there is to write.
+    command -v pactl >/dev/null 2>&1 || return 0
+    (
+        waited=0
+        # Far longer than a sound server takes to come up beside a desktop, and
+        # short enough that this is never something a user finds running.
+        while [ "$waited" -lt 60 ]; do
+            # A *default sink*, not merely a server that answers. Those are
+            # different moments and the gap between them is the whole bug this
+            # line is written against: pipewire-pulse replies to `info` as soon
+            # as it is listening, seconds before the session manager has looked
+            # at the machine's cards and chosen one to play through. A publish
+            # made in that gap asks for a default sink, is told there is none,
+            # and writes a copy with no sound in it — which is indistinguishable
+            # from a machine that has no sound at all, and leaves the login
+            # screen guessing exactly as it did before any of this existed.
+            if pactl info 2>/dev/null | grep -q '^Default Sink: .'; then
+                "$greeter" --publish-look || true
+                exit 0
+            fi
+            sleep 1
+            waited=$((waited + 1))
+        done
+        echo "cedm-session: no default sink appeared; the login screen will" \
+             "choose its own output." >&2
+    ) &
+}
+publish_look_when_the_sound_server_answers || true
+
+# What follows this session is this display manager's own login screen, which
+# takes the displays back within the second. A compositor that knows that can
+# leave its last frame on the screen on the way out, instead of letting the
+# kernel take the picture down along with the process — which is the whole of
+# the black screen a logout used to end with, and was nothing either compositor
+# asked for. See "Handing the displays over" in the README.
+#
+# Exported for whatever session the user picked, not only for LineXinBar's: it
+# is a statement about what happens next, not about which desktop is starting,
+# and a desktop that has never heard of it ignores an unknown variable the way
+# it ignores every other one in this environment.
+LXB_HOLD_DISPLAY=1
+export LXB_HOLD_DISPLAY
+
+exec "$@"

@@ -1,0 +1,21 @@
+#!/bin/sh
+
+# Take CEDM out of the boot path, without taking the running machine down with
+# it.
+#
+# Disabling drops the display-manager.service alias, so the next boot goes to
+# whichever login screen is still installed rather than to a unit whose binary
+# has just been removed. Stopping is deliberately not done: this unit owns the
+# seat that the signed-in user's session is running on, and stopping it during
+# an unattended `apt upgrade` would end that session and everything in it. The
+# greeter that is already running is the one that was already running; the next
+# boot is when the change takes effect.
+
+set -e
+
+if [ "$1" = remove ] && [ -d /run/systemd/system ]; then
+    systemctl --quiet disable cedm.service \
+        >/dev/null 2>&1 || true
+fi
+
+exit 0

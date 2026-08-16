@@ -1,0 +1,42 @@
+// Optional. Not installed as an active rule by any CEDM package, and it should
+// not be dropped into /etc/polkit-1/rules.d without reading the whole of this.
+//
+// The greeter's bottom row asks `systemctl` to suspend, reboot or power the
+// machine off. It does not carry any of them out: logind does, if polkit says
+// so. On an ordinary machine polkit already says so — the greeter holds the
+// active session on the seat, and the default policy allows an active local
+// session to power the machine down — so most installations need nothing here
+// at all.
+//
+// What the default policy declines is the case it should decline: powering off
+// while somebody else is still signed in. `power-off-multiple-sessions` asks
+// for an administrator, because the person at the login screen is, by
+// definition, not yet known to be any of the people whose work is about to be
+// discarded.
+//
+// This file exists for the machine that has decided otherwise: a console under
+// a television, one household, no remote sessions to lose. It removes that
+// prompt for the greeter account only, and for nobody else.
+//
+// Install as /etc/polkit-1/rules.d/49-cedm-power.rules, and read
+// /etc/console-experience-desktop-manager/config.toml first: turning the
+// buttons off there is the right answer for a kiosk or a shared machine, and it
+// is the opposite of this file rather than a weaker version of it.
+
+polkit.addRule(function (action, subject) {
+    if (subject.user !== "cedm-greeter") {
+        return undefined;
+    }
+
+    switch (action.id) {
+        case "org.freedesktop.login1.power-off":
+        case "org.freedesktop.login1.power-off-multiple-sessions":
+        case "org.freedesktop.login1.reboot":
+        case "org.freedesktop.login1.reboot-multiple-sessions":
+        case "org.freedesktop.login1.suspend":
+        case "org.freedesktop.login1.suspend-multiple-sessions":
+            return polkit.Result.YES;
+        default:
+            return undefined;
+    }
+});

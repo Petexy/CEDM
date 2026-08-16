@@ -1,0 +1,80 @@
+<!--
+  Restart: two arrows chasing each other round a circle.
+
+  The drawing below is `lxb-desktop`'s `refresh.svg`, unchanged from `<svg` to
+  the end. Its own name there is about asking a library for its contents again;
+  the picture is the same picture, and a cycle is what a machine going down and
+  coming back up is — two journeys and not one, which is exactly why the shell
+  drew it as two arms rather than as one arrow returning to its start.
+
+  Moulded white plastic under one lamp, like everything else in this row.
+-->
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <defs>
+    <linearGradient id="face" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#f7f7f7"/>
+      <stop offset="0.35" stop-color="#eaeaea"/>
+      <stop offset="0.58" stop-color="#d6d6d6"/>
+      <stop offset="0.78" stop-color="#dfdfdf"/>
+      <stop offset="0.92" stop-color="#efefef"/>
+      <stop offset="1" stop-color="#f8f8f8"/>
+    </linearGradient>
+    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="0.72" stop-color="#ffffff" stop-opacity="0.96"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.9"/>
+    </linearGradient>
+    <!-- In the cell's own coordinates rather than each arm's, so both arms are
+         lit by the one lamp. Per-arm bounds would run a bright rim along the
+         top of the lower arm, which is the middle of the drawing. -->
+    <linearGradient id="edge" gradientUnits="userSpaceOnUse" x1="0" y1="2" x2="0" y2="30">
+      <stop offset="0" stop-color="#ffffff" stop-opacity="0.95"/>
+      <stop offset="0.2" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="0.86" stop-color="#ffffff" stop-opacity="0"/>
+      <stop offset="1" stop-color="#ffffff" stop-opacity="0.55"/>
+    </linearGradient>
+    <linearGradient id="turn" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0" stop-color="#000000" stop-opacity="0.14"/>
+      <stop offset="0.24" stop-color="#000000" stop-opacity="0"/>
+      <stop offset="0.76" stop-color="#000000" stop-opacity="0"/>
+      <stop offset="1" stop-color="#000000" stop-opacity="0.16"/>
+    </linearGradient>
+    <filter id="drop" x="-40%" y="-40%" width="190%" height="190%">
+      <feDropShadow dx="0.5" dy="1.2" stdDeviation="0.48"
+                    flood-color="#3a3a3a" flood-opacity="0.5"/>
+    </filter>
+    <filter id="polish" x="-12%" y="-12%" width="124%" height="124%">
+      <feGaussianBlur stdDeviation="0.16"/>
+    </filter>
+
+    <!-- One arm, drawn once and turned half a circle for the other, so the two
+         cannot drift apart. The band lies between radius 6.3 and 10.9 about the
+         centre and runs from a tail cut square across it at 170 degrees to the
+         head's barbs at 55; the barbs are at radius 4.6 and 12.6 on that same
+         radius, and the point is up the tangent from the band's middle. -->
+    <path id="arm"
+          d="M5.27 14.11A10.9 10.9 0 0 1 22.25 7.07L23.23 5.68 26.18 12.63
+             18.64 12.23 19.61 10.84A6.3 6.3 0 0 0 9.8 14.91z"/>
+    <clipPath id="arms">
+      <use href="#arm"/>
+      <use href="#arm" transform="rotate(180 16 16)"/>
+    </clipPath>
+
+    <!-- The polish, laid across the whole cell and cut to the arms by that
+         clip. Its lower edge curves, so the band comes out domed rather than
+         sawn flat where the shine stops. -->
+    <path id="crest" d="M2 2H30V15.1C24.6 18.3 7.4 18.3 2 15.1z"/>
+  </defs>
+
+  <g filter="url(#drop)">
+    <g clip-path="url(#arms)">
+      <rect x="1" y="1" width="30" height="30" fill="url(#face)"/>
+      <use href="#crest" fill="url(#gloss)" filter="url(#polish)"/>
+      <rect x="1" y="1" width="30" height="30" fill="url(#turn)"/>
+    </g>
+    <g fill="none" stroke="url(#edge)" stroke-width="0.9" stroke-linejoin="round">
+      <use href="#arm"/>
+      <use href="#arm" transform="rotate(180 16 16)"/>
+    </g>
+  </g>
+</svg>

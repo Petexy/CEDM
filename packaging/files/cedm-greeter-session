@@ -1,0 +1,252 @@
+#!/bin/sh
+
+# The greeter's own session, as greetd starts it.
+#
+# CEDM is a Wayland client, so something has to own the seat and give it a
+# surface to draw on. That is LineXinBar's compositor, packaged apart from that
+# project's shell as `lxb-compositor` and depended on by this package.
+# See "The compositor that gives the greeter its seat" below for why it is that
+# one and no longer a choice.
+#
+# It exits when the greeter does — which is what makes the greeter's exit the
+# signal greetd waits for before starting the authenticated session — and it
+# leaves VT switching available, because a greeter that has taken the console
+# and will not give it back is a machine with no way out of a failed login.
+
+set -eu
+
+# The greeter's output, moved off the login VT and into the journal.
+#
+# greetd points a session's stdio at the VT, so everything the compositor says
+# on the way up is written onto the console — and stays there, invisible under
+# the greeter's own drawing, until the greeter exits at sign-in and uncovers it
+# for the one frame before the session's compositor paints. That frame is where
+#
+#     [libseat] Could not connect to socket /run/seatd.sock
+#     [libseat] Backend 'seatd' failed to open seat, skipping
+#
+# comes from: routine libseat chatter about trying seatd before falling back to
+# logind, printed at start-up and read by a user an hour later.
+#
+# Descriptor 3 keeps the console reachable across that move, and is used for
+# exactly one thing: saying where to look when the greeter fails to start. The
+# unit's own comment is the promise being kept here — a machine whose GPU or
+# seat is misconfigured has to end up with a console that says so, and a silent
+# black screen would be worse than the noise this removes.
+if [ "${CEDM_GREETER_LOGGED-}" != 1 ]; then
+    exec 3>&2
+    if command -v systemd-cat >/dev/null 2>&1; then
+        CEDM_GREETER_LOGGED=1
+        export CEDM_GREETER_LOGGED
+        # `/bin/sh "$0"` rather than `$0`: an `exec` that fails is a shell that
+        # exits, and a login screen must not be lost to a missing executable
+        # bit. Descriptor 3 is not close-on-exec, so it survives this.
+        exec systemd-cat --identifier=cedm-greeter -- /bin/sh "$0" "$@"
+    fi
+fi
+unset CEDM_GREETER_LOGGED
+
+# Do not raise a compositor on a machine that is going down.
+#
+# greetd starts this script the instant a session ends. When the session ended
+# *because* the user asked to power off, that instant is also the one systemd
+# begins stopping this service in, and the two collide on the display: the
+# outgoing compositor drops DRM master, the greeter's takes it, and the kernel
+# repaints the console underneath both. On the machine this was found on that
+# raced amdgpu into an atomic commit which never completed — the display
+# wedged, VT switching stopped answering, and greetd could not reap a session
+# stuck in the kernel, so systemd sat out its whole stop timeout before killing
+# it. From the other side of the screen that is a machine that refuses to shut
+# down.
+#
+# There is nothing for a greeter to do in that window anyway: nobody is going
+# to log in to a machine that is powering off.
+#
+# logind publishes PreparingForShutdown before it asks systemd for anything, so
+# it is the earliest question that can be asked, and `is-system-running`
+# catches the case where the transaction is already under way. Both are
+# bounded, and if neither can be reached the greeter starts exactly as before.
+machine_is_going_down() {
+    preparing="$(timeout 2 busctl --system get-property org.freedesktop.login1 \
+        /org/freedesktop/login1 org.freedesktop.login1.Manager \
+        PreparingForShutdown 2>/dev/null || true)"
+    case "$preparing" in
+        *true*) return 0 ;;
+    esac
+    [ "$(timeout 2 systemctl is-system-running 2>/dev/null || true)" = stopping ]
+}
+
+if machine_is_going_down; then
+    # Hold the greeter's place rather than giving it up. greetd starts the
+    # greeter again whenever one ends, so exiting here would loop: a PAM
+    # session, a logind session, a login shell and whatever its profile prints
+    # on the VT, several times over, while logind is trying to take those very
+    # sessions down. Waiting hands greetd one child instead, which dies the
+    # instant systemd terminates the service and can be reaped immediately.
+    #
+    # `exec`, so that child is the sleep itself and not a shell that has to
+    # pass a signal on. Bounded rather than forever: if a shutdown is somehow
+    # abandoned, a machine that returns to its login screen a minute later is
+    # recoverable, and one that never returns to it is not.
+    exec sleep 60
+fi
+
+# The profile, sourced here because greetd no longer does it.
+#
+# `source_profile = false` in greetd.toml turns greetd's copy off, for the
+# reason written out in that file: greetd can only source a profile through a
+# login shell whose output is the login VT, and a chatty /etc/profile.d
+# fragment then writes across the greeter. Sourcing it below the redirect above
+# keeps the environment and sends the noise to the journal with everything else.
+#
+# /etc/profile is written for an interactive login shell, not for `set -eu`, so
+# both are relaxed across the sourcing and restored after it.
+set +eu
+[ -r /etc/profile ] && . /etc/profile
+[ -n "${HOME-}" ] && [ -r "$HOME/.profile" ] && . "$HOME/.profile"
+set -eu
+
+# Where the wrapper for the *authenticated* session lives, handed to the
+# greeter rather than compiled into it: this file knows where it was installed
+# and the binary does not. A package that puts both somewhere other than
+# /usr/bin — Nix does — stays consistent for free, and if the path named here
+# is not there the greeter falls back to starting the session's own argv
+# directly, which is what it did before the wrapper existed.
+CEDM_SESSION_LAUNCHER="$(dirname -- "$0")/cedm-session"
+export CEDM_SESSION_LAUNCHER
+
+# greetd starts this from a service manager, not from a desktop. Anything left
+# in the environment that names a display is stale, and would send the greeter
+# looking for a compositor that is not there.
+unset WAYLAND_DISPLAY WAYLAND_SOCKET DISPLAY
+
+export XDG_SESSION_TYPE=wayland
+export XDG_CURRENT_DESKTOP=CEDM
+export XDG_SESSION_DESKTOP=cedm
+export DESKTOP_SESSION=cedm
+
+# Where the greeter looks for the sessions it will offer. Only a default: a
+# machine that installs desktops somewhere else sets this itself, and the
+# greeter reads whatever is set here rather than a compiled-in list.
+: "${XDG_DATA_DIRS:=/usr/local/share:/usr/share}"
+export XDG_DATA_DIRS
+
+# Remembered account and session choices are written here, under the greeter
+# account's own home. Nothing else is: no authentication answer ever reaches
+# this file, and the directory is created 0700 by the greeter itself.
+: "${XDG_STATE_HOME:=${HOME:-/var/lib/console-experience-desktop-manager/greeter}/.local/state}"
+export XDG_STATE_HOME
+
+# The greeter binary, beside this script rather than off PATH, for the reason
+# the session launcher above is: a package that installs somewhere other than
+# /usr/bin stays consistent for free.
+GREETER="$(dirname -- "$0")/cedm"
+[ -x "$GREETER" ] || GREETER=cedm
+
+# The compositor that gives the greeter its seat.
+#
+# LineXinBar's compositor, and only that one. This package depends on it — on
+# `lxb-compositor`, which is the compositor packaged apart from that
+# project's shell for exactly this purpose, so a machine with a login screen
+# does not thereby have a desktop it never asked for.
+#
+# It used to be Cage, with LineXinBar's compositor as an option, and what
+# settled it was the hand-over. Cage is a kiosk compositor: it knows nothing
+# about displays beyond turning them on — every screen in whatever mode it
+# offered first, arranged left to right, always in SDR — and, being a Wayland
+# client, the greeter cannot ask it for any of that. A login screen that hands
+# over to a session in HDR at 240 Hz by way of a 60 Hz SDR login screen is not
+# one anybody would call finished.
+#
+# It also could not hand the displays over. Closing the last handle on a DRM
+# device is what blanks a display — the kernel destroys that file's
+# framebuffers and disables the plane still scanning one out — so whichever
+# compositor the greeter ran on, the screen went black for the whole of greetd
+# opening a session and the session's compositor setting a mode. Measured here:
+# 866 ms. Removing that needs the outgoing compositor to hold the descriptor
+# open and the incoming one to inherit the configuration rather than reset it,
+# which is a thing a compositor must implement and Cage does not. See "Handing
+# the displays over" in the README, and `LXB_HOLD_DISPLAY` below.
+#
+# The trade that used to argue for Cage is real and is now the smaller one. An
+# ordinary compositor fullscreens a client on one output, so on a machine with
+# two monitors the login column is drawn on one of them and the other shows the
+# wallpaper. That is worth having over a black screen at every login on both,
+# and it is exactly right on the single-display machines this project is for —
+# a handheld, a console, a television. What removes it is the greeter opening a
+# surface per output rather than one, which is the next piece of work.
+
+# What the login screen brings the displays up in: the last signed-in account's
+# published look, written out as a compositor configuration.
+#
+# A failure here is not a reason to stop. The file is display settings, and a
+# compositor started without one brings every screen up the way it would have
+# anyway — which is what every login screen did before this existed.
+COMPOSITOR_CONFIG="$XDG_STATE_HOME/console-experience-desktop-manager/greeter-compositor.toml"
+
+start_lxb() {
+    # Standard output is the wallpaper record; everything the greeter has to
+    # say about writing the file goes to the journal with the rest of the
+    # output above. An empty answer is a machine whose monotonic clock or boot
+    # id could not be read, which is a compositor left to its own background.
+    if ! wallpaper="$("$GREETER" --compositor-config "$COMPOSITOR_CONFIG" -- "$@")"; then
+        echo "cedm: could not write $COMPOSITOR_CONFIG; starting without it." >&2
+        rm -f "$COMPOSITOR_CONFIG"
+        return 1
+    fi
+    # Which wallpaper that compositor draws before this greeter has a window,
+    # and again after it has closed one — the two intervals either side of a
+    # login screen in which nothing is on screen and the alternative is black.
+    #
+    # It has to be told, rather than left to work it out: it reads the shell
+    # settings of the account it runs as, and that account is the greeter's
+    # own, which has no LineXinBar and never will. Left alone it would draw the
+    # default purple under a login screen the user has set to blue.
+    #
+    # The greeter is handed the same record back by the compositor and carries
+    # the animation on from it, so the wallpaper the machine comes up on is one
+    # continuous picture from the compositor's first frame to the session's.
+    if [ -n "$wallpaper" ]; then
+        LXB_BACKGROUND_HANDOFF="$wallpaper"
+        export LXB_BACKGROUND_HANDOFF
+    fi
+    # This compositor is holding the displays for a session that starts within
+    # the second, on both counts: it must not blank them on the way up to reset
+    # a device the machine's last compositor was still drawing on, and it must
+    # not let the kernel take the picture down on the way out. Neither is what
+    # either compositor asked for, and between them they are the black screen a
+    # login used to have in the middle. See "Handing the displays over" in the
+    # README.
+    LXB_HOLD_DISPLAY=1
+    export LXB_HOLD_DISPLAY
+    # `--shell` starts the greeter named in that file and ties the compositor's
+    # lifetime to it, which is the contract greetd wants: when the greeter
+    # exits, the compositor exits, and the session begins.
+    dbus-run-session -- lxb --config "$COMPOSITOR_CONFIG" --shell
+}
+
+# The compositor is a package dependency, so a machine without it is one whose
+# install is broken rather than one with a choice to make. Say so on the
+# console — descriptor 3 — because a greeter that cannot start shows nothing at
+# all, and "nothing at all" is the one outcome the unit's retry limit exists to
+# avoid.
+if ! command -v lxb >/dev/null 2>&1; then
+    echo "cedm: lxb is not installed, so there is no compositor to run the" >&3
+    echo "cedm: login screen on. Install lxb-compositor." >&3
+    exit 1
+fi
+
+# Deliberately not `exec`: the exit status is wanted. Everything above has been
+# routed to the journal, so a machine whose greeter cannot start would otherwise
+# show nothing at all. One process more than an `exec` would have cost; greetd
+# waits for this shell rather than for the compositor, which is the same signal
+# arriving from one level up.
+status=0
+start_lxb "$@" || status=$?
+
+if [ "$status" -ne 0 ]; then
+    echo "cedm: the greeter exited with status $status." >&3
+    echo "cedm: journalctl -b -t cedm-greeter has the reason." >&3
+fi
+
+exit "$status"

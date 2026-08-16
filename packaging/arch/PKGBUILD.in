@@ -1,0 +1,103 @@
+# Maintainer: Piotr Lewandowski <piotr.petexiness@gmail.com>
+
+pkgname=cedm
+pkgver=@VERSION@
+pkgrel=1
+pkgdesc='Controller-first graphical display manager for console and desktop sessions'
+arch=('x86_64' 'aarch64')
+url='https://github.com/petexy/ConsoleExperienceDesktopManager'
+license=('GPL-3.0-only' 'Apache-2.0')
+depends=(
+    # greetd owns PAM and the sessions it starts; CEDM is its greeter and its
+    # configuration, and is not a display manager without it.
+    # lxb-compositor gives that greeter a seat to draw on — it is
+    # LineXinBar's compositor packaged apart from that project's shell, so this
+    # brings in a Wayland session and not a desktop. Both are started by name
+    # at boot, so neither is optional.
+    'greetd'
+    'lxb-compositor'
+    # The four sounds the login screen answers a button with: rodio's CPAL
+    # backend links libasound.so.2, and a greeter that cannot resolve it does
+    # not start at all rather than starting quietly.
+    'alsa-lib'
+    'dbus'
+    'glibc'
+    'libgcc'
+    'libglvnd'
+    'libx11'
+    'libxcb'
+    'libxcursor'
+    'libxi'
+    'libxkbcommon'
+    'mesa'
+    'systemd'
+    'systemd-libs'
+    'wayland'
+)
+# Arch's rust package provides the cargo name without a versioned provide. The
+# build wrapper checks rustc/cargo against the crate's own rust-version 1.85
+# before invoking makepkg.
+makedepends=('cargo' 'gcc' 'pkgconf')
+optdepends=(
+    'vulkan-icd-loader: Vulkan renderer backend'
+    'accountsservice: account pictures on the login screen'
+    'polkit: machine actions from the login screen'
+    # Strictly an improvement on a machine that has it, and never a
+    # requirement: where LineXinBar's compositor is installed the greeter runs
+    # under it instead of Cage, which is what lets the login screen set a mode,
+    # place its outputs and drive a display in HDR. Without it the greeter runs
+    # exactly as before under the Cage dependency above.
+    'lxb-desktop: the desktop this login screen was built alongside'
+)
+backup=("etc/$pkgname/greetd.toml")
+install=cedm.install
+source=("$pkgname-$pkgver.tar.gz")
+sha256sums=('@SOURCE_SHA256@')
+_cedm_rustflags="${RUSTFLAGS:-}"
+
+prepare() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    _cargo_target="$(rustc -vV | sed -n 's/^host: //p')"
+    cargo fetch --locked --target "$_cargo_target"
+}
+
+build() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    export RUSTFLAGS="$_cedm_rustflags --remap-path-prefix=$srcdir=/usr/src/debug/$pkgname"
+    cargo build --frozen --release --bins
+}
+
+check() {
+    cd "$pkgname-$pkgver"
+    export RUSTUP_TOOLCHAIN=stable
+    export CARGO_TARGET_DIR=target
+    # `cargo test` already builds in the dev profile. Nothing here may pin an
+    # optimisation level: RUSTFLAGS is appended after the profile's own flags
+    # and wins, so a level named here would silently override the profile.
+    export RUSTFLAGS="$_cedm_rustflags --remap-path-prefix=$srcdir=/usr/src/debug/$pkgname"
+    cargo test --frozen --lib --bins
+}
+
+package() {
+    cd "$pkgname-$pkgver"
+    ./packaging/install.sh \
+        --destdir "$pkgdir" \
+        --prefix /usr \
+        --sysconfdir /etc \
+        --target-dir target
+
+    install -Dm0644 LICENSE \
+        "$pkgdir/usr/share/licenses/$pkgname/GPL-3.0-only.txt"
+    install -Dm0644 assets/fonts/LICENSE.txt \
+        "$pkgdir/usr/share/licenses/$pkgname/Roboto-Apache-2.0.txt"
+    install -Dm0644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
+    install -Dm0644 contrib/config.toml.example \
+        "$pkgdir/usr/share/doc/$pkgname/config.example.toml"
+    install -Dm0644 contrib/seamless/README.md \
+        "$pkgdir/usr/share/doc/$pkgname/seamless-login.md"
+    install -Dm0644 packaging/files/polkit-power.rules.example \
+        "$pkgdir/usr/share/doc/$pkgname/polkit-power.rules.example"
+}

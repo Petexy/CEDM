@@ -1,0 +1,46 @@
+# Optional administrator policy. Install as:
+# /etc/cedm/config.toml
+#
+# A session is identified by its desktop-file name without `.desktop`. This is
+# only a preference: CEDM still requires that the session be discovered and
+# validated locally before it can be shown or launched.
+default_session = "lxb"
+
+# Remember only successful login/session choices in the unprivileged greeter
+# account's XDG state directory. No authentication answers are ever stored.
+remember_user = true
+remember_session = true
+
+# Whether the login screen answers a button with a sound.
+#
+# It makes four noises, all of them LineXinBar's own: the highlight moving, a
+# press it acts on, a key of the on-screen keyboard going down, and a password
+# refused. Only a button makes any of them — a pointer is silent, because the
+# highlight is already following it under the user's hand — and the refusal is
+# the exception, because it answers no press at all and lands seconds after the
+# one that asked for it, very often at somebody who has looked away.
+#
+# A switch rather than a level: this screen runs before anybody has signed in,
+# as an account of its own, and how loud it is, is how loud the machine is.
+# Turn it off for a machine that must be quiet — a ward, a shared office, a
+# room somebody sleeps in. Note that an unreadable policy file silences this
+# along with everything else here, which is the fail-closed reading: a typo
+# must not start a login screen clicking in a room that asked for silence.
+sound = true
+
+# Which of the three machine actions the bottom row offers.
+#
+# Only whether the greeter *shows* them. Whether they are carried out is
+# polkit's answer: the greeter asks `systemctl`, which asks `logind`, which
+# asks polkit, and an unauthenticated console user may well be refused. Turn
+# them off here for a kiosk or a shared machine, where the button should not
+# exist at all; leave them on and write a polkit rule where they should exist
+# but not for everybody.
+#
+# The route for an account the greeter cannot enumerate is not listed here. It
+# is always offered, because on a machine whose accounts live in a directory it
+# is the only way in, and withdrawing it would withdraw the login itself.
+[power]
+sleep = true
+restart = true
+shut_down = true

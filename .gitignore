@@ -1,0 +1,10 @@
+/target/
+*.log
+
+# Built packages and the source archives they are cut from. `snapshot_source`
+# skips these by name too, so an archive can never contain a previous one.
+/packaging/out/
+
+# `nix build` result links.
+/result
+/result-*

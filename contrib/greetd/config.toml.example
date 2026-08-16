@@ -1,0 +1,25 @@
+# Reference only. Install and test from a spare VT before replacing another
+# display manager. `cage -s` keeps VT switching available and exits with CEDM;
+# greetd starts the authenticated session only after that greeter exits.
+#
+# The command below is the shortest thing that works, and it is not what a
+# package installs. `/usr/bin/cedm-greeter-session` is: it moves the greeter's
+# output off the login VT and into the journal, holds its place while the
+# machine is shutting down, sources the profile greetd has been told to stop
+# sourcing, and writes the display configuration its compositor comes up in.
+# Prefer it wherever it exists; this line is for a machine that has the greeter
+# and nothing else.
+#
+# Keep the greeter and the session on the same VT. greetd runs the session on
+# the terminal configured here, so a greeter on VT 1 hands over to a session on
+# VT 1 and the display never has to be switched away and back. A greeter on a
+# VT of its own costs a mode set and a console flash that nothing later can
+# hide. See ../seamless/README.md for the rest of that story.
+
+[terminal]
+vt = 1
+switch = true
+
+[default_session]
+command = "dbus-run-session cage -s -- console-experience-desktop-manager"
+user = "greeter"

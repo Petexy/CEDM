@@ -1,0 +1,77 @@
+[Unit]
+Description=Console Experience Desktop Manager
+Documentation=https://github.com/petexy/ConsoleExperienceDesktopManager
+Documentation=man:greetd(1)
+
+# This unit is a display manager, so it is the machine's login screen and there
+# can only be one. `Alias=display-manager.service` below is what makes
+# `systemctl enable` disable whichever one was there before; the conflict with
+# greetd's own unit covers the other half, because CEDM *is* greetd with a
+# different configuration and two of them would fight over the same VT.
+Conflicts=getty@tty1.service
+Conflicts=greetd.service
+After=getty@tty1.service
+After=systemd-user-sessions.service
+
+# Both plymouth units, which are not the same wait. `plymouth-quit` asks the
+# splash to go away; `plymouth-quit-wait` is the one that blocks until it has
+# actually gone. Ordering after only the first — which this unit did — lets the
+# greeter start a compositor while plymouth still owns the display, and a
+# hand-over with two owners is the shape of bug this greeter has already been
+# bitten by once. greetd's own unit orders after the waiting one.
+After=plymouth-quit.service
+After=plymouth-quit-wait.service
+
+# The greeter's sessions are logind sessions, so logind has to be there before
+# the first one is opened. SDDM's unit orders after it; greetd's omits it and
+# gets away with it because dbus.socket usually drags logind in first.
+After=systemd-logind.service
+
+Wants=dbus.socket
+After=dbus.socket
+PartOf=graphical.target
+
+# A greeter that cannot start must not be restarted forever: on a machine whose
+# GPU or seat is misconfigured that is an unreadable flicker instead of a
+# console with an error on it. Three attempts, then stop and leave the VT.
+StartLimitIntervalSec=30
+StartLimitBurst=3
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/greetd --config /etc/cedm/greetd.toml
+Restart=always
+RestartSec=1
+
+# A login screen must not be able to hold a shutdown open. greetd cannot reap a
+# compositor that is stuck inside the kernel, and a display driver that wedges
+# during the hand-over will do exactly that, so the default ninety seconds of
+# `stop-sigterm` is ninety seconds in which a machine that was asked to power
+# off looks like a machine that has hung. Ten is far more than a healthy greetd
+# needs to give the VT back, and it bounds the unhealthy case at something a
+# person will sit through rather than reach for the power button during.
+TimeoutStopSec=10s
+
+# greetd's own unit sets this, and for the reason it always gives: a greeter
+# whose output pipe has gone away should find that out from a failed write it
+# can report, not from a signal that kills the login screen.
+IgnoreSIGPIPE=no
+
+# Also greetd's own, and this unit was missing both.
+#
+# SIGHUP after SIGTERM is what actually ends a session: the things greetd
+# starts are attached to a terminal, and a login shell or a compositor that
+# sits through SIGTERM will still go when its terminal hangs up. Without it
+# the stop runs to the timeout, and because plymouth-poweroff.service is
+# ordered `After=display-manager.service`, every second of that timeout is a
+# second of bare console where the shutdown splash should be.
+SendSIGHUP=yes
+
+# The greeter opens PAM sessions, and pam_keyinit gives each one a keyring.
+# Under systemd's default the service gets a private keyring the sessions
+# beneath it cannot share, which is not what a login screen wants — pam_kwallet
+# and friends put the key they unlock there.
+KeyringMode=shared
+
+[Install]
+Alias=display-manager.service
