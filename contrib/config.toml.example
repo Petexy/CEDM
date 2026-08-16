@@ -11,6 +11,25 @@ default_session = "lxb"
 remember_user = true
 remember_session = true
 
+# Which language the login screen is written in.
+#
+# Commented out, which is the normal case: the greeter takes the machine's own
+# language, from LC_ALL/LC_MESSAGES/LANG in its environment and then from
+# whichever file this distribution keeps the machine's locale in —
+# /etc/locale.conf, /etc/default/locale, /etc/sysconfig/i18n,
+# /etc/env.d/02locale, /etc/conf.d/locale or /etc/environment, in that order.
+# The journal names both the language it settled on and the file it came from.
+#
+# Set this only for the machine whose login screen should *not* be in the
+# machine's language: a shared terminal in a building where the desks were set
+# up in one language and the people signing in read another.
+#
+# A locale name or a language tag; "pl", "pl_PL.UTF-8" and "pt-BR" are all
+# understood. Nine are written: en, fr, de, hi, pl, pt-BR, ru, es, zh-CN.
+# Anything else is ignored and the machine's own language is used, rather than
+# a typo here being a machine that will not present a login screen.
+#language = "pl"
+
 # Whether the login screen answers a button with a sound.
 #
 # It makes four noises, all of them LineXinBar's own: the highlight moving, a

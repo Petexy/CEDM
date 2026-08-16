@@ -5,7 +5,7 @@ Summary:        Controller-first graphical display manager for console and deskt
 
 # CEDM, its embedded Roboto, and the locked statically linked Rust dependency
 # graph for Linux.
-License:        GPL-3.0-only AND Apache-2.0 AND MIT AND BSD-2-Clause AND BSD-3-Clause AND ISC AND MPL-2.0 AND Unicode-3.0 AND Zlib
+License:        GPL-3.0-only AND Apache-2.0 AND OFL-1.1 AND MIT AND BSD-2-Clause AND BSD-3-Clause AND ISC AND MPL-2.0 AND Unicode-3.0 AND Zlib
 URL:            https://github.com/petexy/ConsoleExperienceDesktopManager
 Source0:        %{name}-%{version}.tar.gz
 
@@ -178,7 +178,7 @@ fi
 %systemd_postun %{name}.service
 
 %files
-%license LICENSE assets/fonts/LICENSE.txt
+%license LICENSE assets/fonts/LICENSE.txt assets/fonts/LICENSE-NotoSans.txt
 %doc README.md contrib/config.toml.example
 %{_docdir}/%{name}/polkit-power.rules.example
 %{_docdir}/%{name}/seamless-login.md

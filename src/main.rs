@@ -86,6 +86,17 @@ struct Args {
     /// into the file with it. Only read with `--compositor-config`.
     #[arg(last = true, value_name = "GREETER ARGUMENT")]
     greeter_arguments: Vec<String>,
+    /// Show the login screen in this language, whatever the machine is set to.
+    ///
+    /// A locale name or a language tag: `pl`, `pl_PL.UTF-8` and `pt-BR` are
+    /// all understood. This is for reviewing the nine translations from one
+    /// desk. The real login screen takes the machine's own language — see
+    /// [`cedm::i18n`] — and an administrator who wants to override that says
+    /// so in the configuration file rather than on a command line nothing
+    /// runs. A language this greeter is not written in is ignored rather than
+    /// fatal, for the same reason the configured one is.
+    #[arg(long, value_name = "LANGUAGE")]
+    language: Option<String>,
     /// Do not open standard or Steam Controller input devices.
     #[arg(long)]
     no_gamepad: bool,
@@ -261,6 +272,23 @@ fn main() -> anyhow::Result<()> {
     if args.size.is_some() || !args.displays.is_empty() {
         args.windowed = true;
     }
+    // Before the sessions are discovered, because a desktop entry carries its
+    // own translations and which of them is read is this answer; and before
+    // anything at all is drawn, because the language does not change again
+    // afterwards. See [`cedm::i18n`].
+    let config = cedm::config::Config::load();
+    let language = cedm::i18n::detect(args.language.as_deref(), config.language.as_deref());
+    cedm::i18n::set(language.language);
+    // Named, and said out loud, because "the login screen came up in English"
+    // has half a dozen causes on nine distributions and no symptom that tells
+    // them apart. The origin is the file or the variable that decided it.
+    tracing::info!(
+        language = language.language.tag(),
+        name = language.language.endonym(),
+        locale = language.locale.as_deref().unwrap_or("none"),
+        from = language.origin,
+        "the login screen speaks the language this machine is set to"
+    );
     if args.displays.len() > cedm::displays::MAX {
         bail!(
             "at most {} displays are composed separately",
@@ -304,7 +332,7 @@ fn main() -> anyhow::Result<()> {
 
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Wait);
-    let mut application = Application::new(args, users, sessions);
+    let mut application = Application::new(args, config, users, sessions);
     event_loop.run_app(&mut application)?;
     if let Some(error) = application.fatal {
         Err(error)
@@ -348,7 +376,7 @@ impl VisualStage {
             },
             Self::Busy(message) => Phase::Busy(message),
             Self::Error(message) => Phase::Error(message),
-            Self::Departing => Phase::Departing("Opening your session…"),
+            Self::Departing => Phase::Departing(cedm::i18n::text().opening_session),
         }
     }
 }
@@ -557,9 +585,17 @@ struct Application {
 }
 
 impl Application {
-    fn new(args: Args, users: Vec<User>, sessions: Vec<Session>) -> Self {
+    /// The administrator's policy is handed in rather than read here, because
+    /// one of the things in it — the language — has to be settled before this
+    /// program draws anything, and a file read twice is a file that warns
+    /// twice about being unreadable.
+    fn new(
+        args: Args,
+        config: cedm::config::Config,
+        users: Vec<User>,
+        sessions: Vec<Session>,
+    ) -> Self {
         let state = State::load();
-        let config = cedm::config::Config::load();
         let preferences = Preferences::load();
         let remembered_user = config.remember_user.then(|| {
             preferences
@@ -668,7 +704,7 @@ impl Application {
         };
         if preview_auth {
             application.stage = Stage::Authenticating {
-                prompt: "Password".to_string(),
+                prompt: cedm::i18n::text().password.to_string(),
                 secret: true,
             };
             application.open_keyboard();
@@ -825,7 +861,7 @@ impl Application {
             self.input.zeroize();
             self.board = Board::default();
             self.transition_to(Stage::Authenticating {
-                prompt: "Password".to_string(),
+                prompt: cedm::i18n::text().password.to_string(),
                 secret: true,
             });
             self.offer_keyboard();
@@ -839,7 +875,9 @@ impl Application {
             session_id: session.id.clone(),
             accent: self.accent.clone(),
         });
-        self.transition_to(Stage::Busy("Starting authentication…".to_string()));
+        self.transition_to(Stage::Busy(
+            cedm::i18n::text().starting_authentication.to_string(),
+        ));
         if !self.auth.as_ref().is_some_and(|actor| {
             actor.send(AuthCommand::Begin {
                 attempt: self.attempt,
@@ -849,7 +887,7 @@ impl Application {
         }) {
             self.pending_attempt = None;
             self.transition_to(Stage::Error(
-                "The authentication worker is unavailable.".to_string(),
+                cedm::i18n::text().worker_unavailable.to_string(),
             ));
         }
     }
@@ -887,7 +925,7 @@ impl Application {
             self.keyboard_restore_focus = Focus::Users;
             return;
         }
-        self.transition_to(Stage::Busy("Checking…".to_string()));
+        self.transition_to(Stage::Busy(cedm::i18n::text().checking.to_string()));
         if !self.auth.as_ref().is_some_and(|actor| {
             actor.send(AuthCommand::Answer {
                 attempt: self.attempt,
@@ -896,7 +934,7 @@ impl Application {
         }) {
             self.pending_attempt = None;
             self.transition_to(Stage::Error(
-                "The authentication worker is unavailable.".to_string(),
+                cedm::i18n::text().worker_unavailable.to_string(),
             ));
         }
     }
@@ -1335,9 +1373,9 @@ impl Application {
             return;
         }
         if self.args.preview {
-            self.transition_to(Stage::Error(format!(
-                "{} is not performed in preview.",
-                action.label()
+            self.transition_to(Stage::Error(cedm::i18n::fill(
+                cedm::i18n::text().power_not_in_preview,
+                action.label(),
             )));
             self.focus = Focus::Continue;
             return;
@@ -1659,7 +1697,7 @@ impl Application {
                     self.board = Board::default();
                     let typed = self.take_typed_ahead();
                     self.transition_to(Stage::Authenticating {
-                        prompt: message,
+                        prompt: translated_prompt(message),
                         secret,
                     });
                     self.focus = Focus::Prompt;
@@ -1804,15 +1842,13 @@ impl Application {
             {
                 self.pending_attempt = None;
                 self.transition_to(Stage::Error(
-                    "The authentication worker is unavailable.".to_string(),
+                    cedm::i18n::text().worker_unavailable.to_string(),
                 ));
             }
         } else if matches!(self.stage, Stage::Departing { sent: true, .. })
             && self.pending_attempt.is_none()
         {
-            self.transition_to(Stage::Error(
-                "The authentication attempt was lost.".to_string(),
-            ));
+            self.transition_to(Stage::Error(cedm::i18n::text().attempt_lost.to_string()));
         }
         if let Some(window) = &self.window {
             window.request_redraw();
@@ -1941,7 +1977,7 @@ impl Application {
             },
             Stage::Busy(message) => Phase::Busy(message),
             Stage::Error(message) => Phase::Error(message),
-            Stage::Departing { .. } => Phase::Departing("Opening your session…"),
+            Stage::Departing { .. } => Phase::Departing(cedm::i18n::text().opening_session),
         };
         let (previous_phase, transition_progress) = self
             .stage_transition
@@ -2231,13 +2267,38 @@ fn tab_action(stage: &Stage, reverse: bool) -> Action {
 /// — it is half a sentence. Measured in the shipped face at the tightest of
 /// the sizes it is set at, these run to about nine tenths of that line.
 fn refusal(failure: Failure, message: String, typed_account: bool) -> String {
+    let text = cedm::i18n::text();
     match failure {
-        Failure::Rejected if typed_account => "Incorrect account name or password.".to_string(),
-        Failure::Rejected => "Incorrect password.".to_string(),
-        Failure::Service if message.trim().is_empty() => {
-            "The login service refused the attempt.".to_string()
-        }
+        Failure::Rejected if typed_account => text.incorrect_account_or_password.to_string(),
+        Failure::Rejected => text.incorrect_password.to_string(),
+        Failure::Service if message.trim().is_empty() => text.service_refused.to_string(),
+        // Deliberately not translated. This is greetd's sentence about this
+        // machine — a socket that would not open, a session that would not
+        // start — and it is the only description of it anybody has; a login
+        // screen that replaced it with a translated generality would be
+        // throwing the news away to say something in the right language.
         Failure::Service => message,
+    }
+}
+
+/// The question PAM asked, in the reader's language where it is one of the
+/// questions PAM asks in English.
+///
+/// PAM localises its own conversation, but only where the process holding it
+/// has a language to localise into — and that process is greetd, a system unit
+/// whose environment is whatever the unit gives it. What comes back over the
+/// socket on nearly every machine is therefore `Password:`, in the middle of a
+/// column that is otherwise entirely in Polish.
+///
+/// Everything the greeter does not recognise is passed through exactly as it
+/// arrived, and that is the more important half: an unrecognised prompt is a
+/// PAM module with something specific to say — a hardware token, a one-time
+/// code, an expiring password — and a login screen that guessed at those would
+/// be answering a question nobody asked. See [`cedm::i18n::Strings::prompt`].
+fn translated_prompt(message: String) -> String {
+    match cedm::i18n::text().prompt(&message) {
+        Some(translated) => translated.to_string(),
+        None => message,
     }
 }
 
@@ -2606,7 +2667,12 @@ mod tests {
                 shot: None,
                 size: None,
                 displays: Vec::new(),
+                language: None,
             },
+            // The default policy rather than this machine's, so a desk with a
+            // `/etc/cedm/config.toml` on it does not test something different
+            // from a build machine without one.
+            cedm::config::Config::default(),
             users,
             vec![session("lxb", true)],
         )

@@ -16,6 +16,7 @@
 //! vector with a fixed, non-configurable verb — the same rule the session
 //! launcher follows, for the same reason.
 
+use crate::i18n;
 use std::process::{Command, Stdio};
 
 /// One of exactly three things the greeter may ask for.
@@ -31,17 +32,23 @@ pub enum Action {
 }
 
 impl Action {
-    /// The label under the mark on the panel.
+    /// The label under the mark on the panel, in the machine's language.
     pub fn label(self) -> &'static str {
+        let text = i18n::text();
         match self {
-            Self::Sleep => "Sleep",
-            Self::Restart => "Restart",
-            Self::ShutDown => "Shut Down",
+            Self::Sleep => text.sleep,
+            Self::Restart => text.restart,
+            Self::ShutDown => text.shut_down,
         }
     }
 
-    /// What is said to `systemctl`.
-    fn verb(self) -> &'static str {
+    /// What is said to `systemctl`, and what this action is called in the
+    /// journal.
+    ///
+    /// A log line is not a place for a translated word: whoever reads it is as
+    /// likely to be reading somebody else's journal as their own, and the verb
+    /// is the thing that was actually asked for.
+    pub fn verb(self) -> &'static str {
         match self {
             Self::Sleep => "suspend",
             Self::Restart => "reboot",
@@ -51,7 +58,7 @@ impl Action {
 
     /// What the user is told when the machine declines.
     pub fn refusal(self) -> String {
-        format!("{} was not permitted.", self.label())
+        i18n::fill(i18n::text().power_not_permitted, self.label())
     }
 }
 
@@ -81,12 +88,12 @@ pub fn request(action: Action) -> Result<(), String> {
     match status {
         Ok(status) if status.success() => Ok(()),
         Ok(status) => {
-            tracing::warn!(action = action.label(), ?status, "power request refused");
+            tracing::warn!(action = action.verb(), ?status, "power request refused");
             Err(action.refusal())
         }
         Err(error) => {
-            tracing::warn!(action = action.label(), %error, "could not ask systemctl");
-            Err(format!("{} is unavailable here.", action.label()))
+            tracing::warn!(action = action.verb(), %error, "could not ask systemctl");
+            Err(i18n::fill(i18n::text().power_unavailable, action.label()))
         }
     }
 }
@@ -97,11 +104,21 @@ mod tests {
 
     #[test]
     fn the_panel_lays_the_actions_out_in_one_fixed_order() {
-        assert_eq!(
-            ALL.map(Action::label),
-            ["Sleep", "Restart", "Shut Down"],
-            "the order the design shows, left to right"
-        );
+        i18n::with_language(i18n::Language::English, || {
+            assert_eq!(
+                ALL.map(Action::label),
+                ["Sleep", "Restart", "Shut Down"],
+                "the order the design shows, left to right"
+            );
+        });
+        // The order is the design's and does not move with the language; only
+        // the words in it do.
+        i18n::with_language(i18n::Language::Polish, || {
+            assert_eq!(
+                ALL.map(Action::label),
+                ["Uśpienie", "Uruchom ponownie", "Wyłącz"]
+            );
+        });
     }
 
     /// The whole of the safety argument for this module is that a verb cannot
@@ -115,9 +132,27 @@ mod tests {
         }
     }
 
+    /// In every language, because several of them write the sentence around
+    /// the action rather than in front of it, and one that dropped the name
+    /// would read as a refusal of nothing in particular.
     #[test]
     fn a_refusal_names_the_action_it_refused() {
-        assert!(Action::ShutDown.refusal().contains("Shut Down"));
-        assert!(Action::Sleep.refusal().contains("Sleep"));
+        i18n::with_language(i18n::Language::English, || {
+            assert!(Action::ShutDown.refusal().contains("Shut Down"));
+            assert!(Action::Sleep.refusal().contains("Sleep"));
+        });
+        for language in i18n::ALL {
+            i18n::with_language(language, || {
+                for action in ALL {
+                    let refusal = action.refusal();
+                    assert!(
+                        refusal.contains(action.label()),
+                        "{language:?}: {refusal:?} does not name {}",
+                        action.label()
+                    );
+                    assert!(!refusal.contains("{}"), "{language:?}: {refusal:?}");
+                }
+            });
+        }
     }
 }

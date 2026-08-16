@@ -74,6 +74,12 @@ install -Dm0644 "$PROJECT_ROOT/contrib/seamless/README.md" \
     "$document_dir/seamless-login.md"
 install -Dm0644 "$PACKAGING_DIR/files/polkit-power.rules.example" \
     "$document_dir/polkit-power.rules.example"
+# The Open Font Licence the two bundled Noto subsets are under. This one is
+# carried rather than pointed at: /usr/share/common-licenses holds the GPL and
+# Apache texts that every Debian system already has, and OFL-1.1 is not one of
+# them, so the copyright file has to have somewhere to send a reader.
+install -Dm0644 "$PROJECT_ROOT/assets/fonts/LICENSE-NotoSans.txt" \
+    "$document_dir/LICENSE-NotoSans.txt"
 # No /usr/share/licenses here: that is the RPM and Arch convention. On Debian
 # the copyright file above is the licence record, and it points at the GPL-3
 # and Apache-2.0 texts every Debian system already carries in

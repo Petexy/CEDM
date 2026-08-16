@@ -12,6 +12,7 @@ pub mod faces;
 pub mod gamma;
 pub mod greeter;
 pub mod handoff;
+pub mod i18n;
 pub mod keyboard;
 pub mod look;
 pub mod power;

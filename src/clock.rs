@@ -10,10 +10,14 @@
 //! `/etc/localtime`, which is the same answer every other program on the
 //! machine gets, and the two fields the greeter actually shows are formatted
 //! here rather than through `strftime` — that would put the greeter's clock at
-//! the mercy of `LC_TIME` in an environment it does not control, and a login
-//! screen showing a different date format from the desktop behind it is worse
-//! than one showing English.
+//! the mercy of `LC_TIME` in an environment it does not control.
+//!
+//! The words in them come from [`crate::i18n`] instead, which reads the
+//! machine's language rather than this process's environment. The shape of the
+//! line is the language's too, and is not always a weekday followed by a
+//! number: Chinese puts the day first and marks it.
 
+use crate::i18n;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// A civil time, already broken down and bounded.
@@ -44,8 +48,6 @@ pub struct Now {
     /// against the clock in the room.
     pub offset: i32,
 }
-
-const WEEKDAYS: [&str; 7] = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 impl Now {
     /// Read the machine's local civil time.
@@ -120,9 +122,12 @@ impl Now {
         format!("{:02}:{:02}", self.hour, self.minute)
     }
 
-    /// `Mon 17`.
+    /// `Mon 17`, in the language the machine is set to.
     pub fn date(&self) -> String {
-        format!("{} {}", WEEKDAYS[self.weekday as usize % 7], self.day)
+        let text = i18n::text();
+        text.date
+            .replace("{weekday}", text.weekdays[self.weekday as usize % 7])
+            .replace("{day}", &self.day.to_string())
     }
 
     /// How to greet somebody at this hour.
@@ -130,12 +135,19 @@ impl Now {
     /// Four bands rather than three: at two in the morning "Good evening" is
     /// wrong in a way the user notices, and a greeter is disproportionately
     /// often read at that hour.
+    ///
+    /// The bands are the same in every language even where that language has
+    /// fewer greetings than four to put in them. Spanish says *buenas noches*
+    /// from six in the evening until morning, so the last two bands hold the
+    /// same words; that is Spanish being right about the evening rather than
+    /// this being wrong about the bands.
     pub fn greeting(&self) -> &'static str {
+        let text = i18n::text();
         match self.hour {
-            5..=11 => "Good morning",
-            12..=17 => "Good afternoon",
-            18..=21 => "Good evening",
-            _ => "Good night",
+            5..=11 => text.good_morning,
+            12..=17 => text.good_afternoon,
+            18..=21 => text.good_evening,
+            _ => text.good_night,
         }
     }
 }
@@ -162,34 +174,71 @@ mod tests {
     fn renders_the_two_fields_the_panel_shows() {
         let now = Now::from_tm(&tm(20, 38, 1, 17)).expect("valid time");
         assert_eq!(now.time(), "20:38");
-        assert_eq!(now.date(), "Mon 17");
+        i18n::with_language(i18n::Language::English, || {
+            assert_eq!(now.date(), "Mon 17");
+        });
     }
 
     #[test]
     fn pads_to_a_stable_width_so_the_clock_does_not_jump() {
         let now = Now::from_tm(&tm(9, 5, 0, 1)).expect("valid time");
         assert_eq!(now.time(), "09:05");
-        assert_eq!(now.date(), "Sun 1");
+        i18n::with_language(i18n::Language::English, || {
+            assert_eq!(now.date(), "Sun 1");
+        });
+    }
+
+    /// The second line is a *pattern*, not a weekday with a number stuck on
+    /// the end of it: the languages disagree about which comes first and about
+    /// whether the number is marked.
+    #[test]
+    fn the_date_is_set_the_way_the_language_sets_it() {
+        let now = Now::from_tm(&tm(20, 38, 1, 17)).expect("valid time");
+        for (language, want) in [
+            (i18n::Language::Polish, "pon. 17"),
+            (i18n::Language::Russian, "пн 17"),
+            (i18n::Language::German, "Mo 17."),
+            (i18n::Language::Hindi, "सोम 17"),
+            (i18n::Language::Chinese, "17日 周一"),
+        ] {
+            i18n::with_language(language, || assert_eq!(now.date(), want));
+        }
     }
 
     #[test]
     fn every_hour_of_the_day_has_a_greeting() {
-        for hour in 0..24 {
-            let now = Now::from_tm(&tm(hour, 0, 3, 12)).expect("valid time");
-            assert!(!now.greeting().is_empty());
+        for language in i18n::ALL {
+            i18n::with_language(language, || {
+                for hour in 0..24 {
+                    let now = Now::from_tm(&tm(hour, 0, 3, 12)).expect("valid time");
+                    assert!(!now.greeting().is_empty(), "{hour} in {language:?}");
+                }
+            });
         }
-        assert_eq!(
-            Now::from_tm(&tm(7, 0, 3, 12)).unwrap().greeting(),
-            "Good morning"
-        );
-        assert_eq!(
-            Now::from_tm(&tm(20, 38, 3, 12)).unwrap().greeting(),
-            "Good evening"
-        );
-        assert_eq!(
-            Now::from_tm(&tm(2, 0, 3, 12)).unwrap().greeting(),
-            "Good night"
-        );
+        i18n::with_language(i18n::Language::English, || {
+            assert_eq!(
+                Now::from_tm(&tm(7, 0, 3, 12)).unwrap().greeting(),
+                "Good morning"
+            );
+            assert_eq!(
+                Now::from_tm(&tm(20, 38, 3, 12)).unwrap().greeting(),
+                "Good evening"
+            );
+            assert_eq!(
+                Now::from_tm(&tm(2, 0, 3, 12)).unwrap().greeting(),
+                "Good night"
+            );
+        });
+        i18n::with_language(i18n::Language::French, || {
+            assert_eq!(
+                Now::from_tm(&tm(7, 0, 3, 12)).unwrap().greeting(),
+                "Bonjour"
+            );
+            assert_eq!(
+                Now::from_tm(&tm(20, 38, 3, 12)).unwrap().greeting(),
+                "Bonsoir"
+            );
+        });
     }
 
     #[test]

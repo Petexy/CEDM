@@ -2,7 +2,7 @@
 
 A controller-first graphical greeter for LineXinBar and ordinary Linux desktop sessions.
 
-This repository is an early, runnable vertical slice. It already renders LineXinBar's exact analytic wallpaper, palette and Liquid Glass material; presents local and directory-user routes in a compact XMB-style carousel; discovers and directly launches installed Wayland session entries without invoking a shell; conducts PAM conversations through greetd; supports controller, mouse and physical-keyboard navigation; embeds the same ANSI on-screen keyboard geometry; draws a whole login screen on every display rather than one across all of them; remembers successful public account/session choices; and hands the wallpaper clock to LineXinBar after authentication.
+This repository is an early, runnable vertical slice. It already renders LineXinBar's exact analytic wallpaper, palette and Liquid Glass material; presents local and directory-user routes in a compact XMB-style carousel; discovers and directly launches installed Wayland session entries without invoking a shell; conducts PAM conversations through greetd; supports controller, mouse and physical-keyboard navigation; embeds the same ANSI on-screen keyboard geometry; draws a whole login screen on every display rather than one across all of them; remembers successful public account/session choices; speaks nine languages, taken from whichever file this distribution keeps the machine's locale in; and hands the wallpaper clock to LineXinBar after authentication.
 
 ## The screen
 
@@ -63,7 +63,7 @@ So the surface is cut back into the displays it was made of and each one is comp
 
 The wallpaper in particular has to be per display, and not only because a stretched gradient looks stretched. LineXinBar gives every output its own layer surface and evaluates the wallpaper against that output's own size, so a greeter that evaluated one across all of them would be handing over a picture the shell is about to replace with a different one on every screen. The seamless frame is only seamless per display. Glass is asked the same question the same way: a pane carries the display it stands on, and where it finds nothing drawn behind it, the wallpaper it falls through to is that display's. It is also cut to that display's bounds — the light under an avatar is drawn wider than the avatar, and on a single screen the edge of the framebuffer takes care of the overhang, while on a row of monitors what is out there is the next screen along.
 
-It is not ready to replace a production display manager yet. In particular, the native seat-owning compositor/broker, NSS/AccountsService enumeration beyond the existing local parser, accessibility/i18n pass, and real-VT integration tests are still work in progress.
+It is not ready to replace a production display manager yet. In particular, the native seat-owning compositor/broker, NSS/AccountsService enumeration beyond the existing local parser, the accessibility pass, and real-VT integration tests are still work in progress. (Localisation is done — see [What it says, and in which language](#what-it-says-and-in-which-language).)
 
 ## Try the safe preview
 
@@ -77,6 +77,13 @@ Start the safe preview directly on a secret prompt to inspect the built-in keybo
 
 ```sh
 cargo run --release -- --windowed --preview --preview-auth
+```
+
+Look at a translation without changing what the machine is set to. It takes a locale name or a language tag, and one this greeter is not written in is ignored rather than fatal:
+
+```sh
+cargo run --release -- --windowed --preview --language pl
+cargo run --release -- --preview --preview-auth --shot /tmp/cedm-de.png --language de_DE.UTF-8
 ```
 
 List the sessions CEDM would offer:
@@ -350,6 +357,54 @@ The last two are refinements and neither is required. A machine running Plasma, 
 
 The publish that happens *before* the session starts cannot answer any of it, so it carries the last known answer forward rather than erasing it. Everything else in a published look is the whole state every time; this is the one exception, and without it every login would wipe the one fact the login screen cannot recover.
 
+## What it says, and in which language
+
+Nine: English, French, German, Hindi, Polish, Portuguese (Brazil), Russian, Spanish and Chinese (Simplified). Every word the greeter writes is in `src/i18n.rs`, once per language, compiled into the binary — there is no catalogue under `/usr/share/locale` to be missing, and no message looked up by a name that could fail to match. A language is a struct, so one that forgot a sentence does not build.
+
+### Where the language comes from
+
+From the machine, because nobody has signed in yet to have a preference. That is one question with a different answer on nearly every distribution, so it is asked in order and the first answer wins:
+
+1. `--language`, for reviewing a translation by hand.
+2. `language` in `/etc/cedm/config.toml`, which is the administrator saying so outright — for the machine whose login screen should *not* be in the machine's language, such as a shared terminal in a building where the desks were set up in one language and the people signing in read another.
+3. `LC_ALL`, `LC_MESSAGES`, `LANG` in the greeter's own environment, in POSIX's order of precedence.
+4. The machine's locale file, in this order, first value found: `/etc/locale.conf` (systemd — Arch, Fedora, openSUSE), `/etc/default/locale` (Debian, Ubuntu), `/etc/sysconfig/i18n` (older Red Hat and SUSE), `/etc/env.d/02locale` and `/etc/conf.d/locale` (Gentoo), `/etc/environment` (PAM's environment file, which some installers put `LANG` into as well). All six are `KEY=value` lines, which is why one parser serves them; they are read, never run.
+5. English.
+
+The first file that *answers* wins rather than the first that exists, because a machine can carry two of them: an empty `/etc/locale.conf` beside a populated `/etc/default/locale` is an ordinary Debian, and stopping at the empty one would read the machine as having no language at all.
+
+An environment that says `C` or `POSIX` is treated as **nothing said** rather than as a choice of English. That is what those names mean — no locale has been selected — and a greeter started by a system unit inherits them routinely; reading them as an answer is how a login screen ends up ignoring the very file the machine's language is written in. It is verifiable from the journal, which names both the language and where the answer came from:
+
+```text
+the login screen speaks the language this machine is set to
+    language=pl name=polski locale=pl_PL.UTF-8 from=/etc/default/locale
+```
+
+### What is not translated, and why
+
+Two kinds of writing, both for the same reason: they are somebody else's words.
+
+- **A session's name** is the desktop's own, and comes from that desktop entry's own `Name[xx]` keys — nothing here could know that GNOME's Polish entry says "GNOME na Xorgu". The country-qualified spelling is preferred over the bare language, so `Name[pt_BR]` beats `Name[pt]`, and an entry with no translation for the reader's language falls back to its unqualified `Name`.
+- **A failure the login service reports.** A socket that would not open or a session that would not start is greetd's news about this machine, and its sentence is the only description of it anybody has; replacing it with a translated generality would throw the news away in order to say something in the right language. The greeter's own refusals — a wrong password, an action polkit declined — are translated, because those are the greeter's to write.
+
+PAM sits between the two. It localises its own conversation, but only where the process holding it has a language to localise into, and that process is greetd — a system unit whose environment is whatever the unit gives it. What comes back over the socket on nearly every machine is therefore `Password:`, in the middle of a column that is otherwise entirely in Polish, so that one question and the two or three beside it are translated here. Anything else PAM asks is passed through exactly as it arrived: an unrecognised prompt is a module with something specific to say — a hardware token, a one-time code, an expiring password — and a greeter that guessed at those would be answering a question nobody asked.
+
+### The keyboard, the clock and the fonts
+
+The on-screen board's character keys are not translated and will not be. It is a picture of an ANSI keyboard and the letters printed on it are the letters it types; a board whose caps said one thing and typed another would be worse in every language. What the machine's language does decide is the handful of caps that are *words*, and the rule there is that a legend stays Latin wherever that language's own keyboards carry Latin legends — a Russian keyboard has `Shift` written on it, so the board does too, while French, German, Spanish and Portuguese boards say `Maj`, `Umschalt`, `Mayús` and `Shift`.
+
+The clock's second line is a pattern rather than a weekday with a number after it, because the languages disagree about the order and about whether the number is marked: `Mon 17`, `Mo 17.`, `пн 17`, `17日 周一`.
+
+Roboto carries Latin, Latin Extended, Greek and Cyrillic — eight of the nine — and no Devanagari and no Han at all, so two Noto faces are bundled beside it in `assets/fonts/` and compiled into the binary with everything else. Without them the Hindi and Chinese columns rasterise to rows of empty boxes, and nothing else in the build would say a word about it. Devanagari is subset to the whole script, so an account named in it draws too; the Han face is subset to the characters this program's own words are made of, because the whole of Noto Sans CJK is twenty megabytes. An account or a session named in Han falls back to whatever the machine has installed — which on a machine with a Chinese desktop is a full CJK face, and on one without is a machine with no Han names to draw.
+
+### Two checks, because a translation is not a string
+
+`cargo test` shapes every sentence of every language in the faces the greeter ships, loaded into an **empty** font database — the machine's own fonts are deliberately kept out of it, because the question is what happens on a machine that has just been installed and has none. A character no shipped face can draw fails the build.
+
+Then it lays every screen out, in every language, on displays from 1280×720 to 4K, and measures each run against the box it was given. Nothing here wraps onto the column: the reserved line under the button is one line tall at every size, the caps of the on-screen board are the width of the keys under them, and text laid out past its rectangle is *cut*. A sentence that does not fit is not a longer sentence — it is half a sentence, and the half that goes missing is the end of it. Both checks prove they have teeth by asserting that a script nothing carries, and a sentence far too long for the line, are reported rather than passed over.
+
+That check is what several of the shorter sentences here are: the reserved line holds about forty Latin characters at the tightest size the greeter is drawn at, and where a natural translation ran past it, the sentence was written shorter rather than the line made longer. It caught an English one too.
+
 ## Validation
 
 ```sh
@@ -368,7 +423,7 @@ Previewing is deliberately separate from installing/configuring the system greet
 2. Add AccountsService/NSS enumeration while retaining the bounded, privacy-safe “Other account” route for LDAP/NIS and hidden users.
 3. Move multi-seat preference coordination and broker-owned accent refresh into the seat service.
 4. Give the greeter a surface per output, so that it draws on every screen under an ordinary compositor and not only under a kiosk one. That is what makes `CEDM_GREETER_COMPOSITOR=lxb` — and with it the login screen's modes, layout and high dynamic range — the default rather than an opt-in for single-display machines; see [What the greeter cannot do with it](#what-the-greeter-cannot-do-with-it).
-5. Add screen reader/a11y semantics and complete localization. (Multi-output layout is done: see [Every display is a display](#every-display-is-a-display). What is left of it is per-output scale factors, which need the layout in logical coordinates the compositor's own broker will publish.)
+5. Add screen reader/a11y semantics. (Localisation is done, in nine languages taken from the machine's own locale: see [What it says, and in which language](#what-it-says-and-in-which-language). Multi-output layout is done too: see [Every display is a display](#every-display-is-a-display). What is left of that is per-output scale factors, which need the layout in logical coordinates the compositor's own broker will publish.)
 6. Add the isolated X11 server/auth wrapper, then expose parsed X11 entries.
 7. Add nested GPU golden frames and real-VT end-to-end tests for LineXinBar and Plasma.
 8. Close the last black interval — the one with no DRM master in it — as part of step 1, and add golden-frame coverage of the whole handover.

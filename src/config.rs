@@ -20,6 +20,20 @@ pub struct Config {
     pub default_session: Option<String>,
     pub remember_user: bool,
     pub remember_session: bool,
+    /// Which language the login screen is written in, as a locale name or a
+    /// language tag: `pl`, `pl_PL.UTF-8` and `pt-BR` are all understood.
+    ///
+    /// Unset — which is the normal case — means the machine's own, worked out
+    /// from the environment and then from whichever file this distribution
+    /// keeps its locale in. See [`crate::i18n`]. This is here for the machine
+    /// whose login screen should not be in the machine's language: a shared
+    /// terminal in a building where the desks are set up in one language and
+    /// the people signing in read another.
+    ///
+    /// A language this greeter is not written in is ignored rather than
+    /// fatal. The alternative is a machine that will not present a login
+    /// screen at all because of a typo in an optional preference.
+    pub language: Option<String>,
     /// Whether the login screen answers a button with a sound — see
     /// [`crate::sound`].
     ///
@@ -85,6 +99,7 @@ impl Default for Config {
             default_session: None,
             remember_user: true,
             remember_session: true,
+            language: None,
             sound: true,
             power: Power::default(),
         }
@@ -103,6 +118,10 @@ impl Config {
             default_session: None,
             remember_user: false,
             remember_session: false,
+            // Not a restriction, so it is not withdrawn: an unreadable policy
+            // file means the machine's own language, which is what a greeter
+            // with no policy at all shows.
+            language: None,
             // Quiet, on the same grounds as the rest of this: a machine whose
             // administrator turned the noise off is one where a typo in this
             // file must not turn it back on. A silent login screen is a working

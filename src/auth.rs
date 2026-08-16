@@ -589,8 +589,12 @@ fn drive(
                 auth_message_type,
                 auth_message,
             } => {
+                // The word in front is the greeter's and is translated; what
+                // follows is PAM's own and is not — see
+                // [`crate::i18n::Strings::service_refused`] for why a module's
+                // own sentence is left in the language it was written in.
                 let prefix = if auth_message_type == AuthMessageType::Error {
-                    "Error: "
+                    crate::i18n::text().error_prefix
                 } else {
                     ""
                 };

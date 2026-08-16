@@ -70,8 +70,51 @@ const MAX_COVERS: usize = 6;
 const MAX_GLASS_BATCHES: usize = 12;
 const UNCUT: [f32; 4] = [-1.0e9, -1.0e9, 1.0e9, 1.0e9];
 const UI_FONT: &str = "Roboto";
-const UI_FONT_REGULAR: &[u8] = include_bytes!("../../assets/fonts/Roboto-Regular.ttf");
-const UI_FONT_BOLD: &[u8] = include_bytes!("../../assets/fonts/Roboto-Bold.ttf");
+
+/// Every face this greeter ships, and between them every character it can be
+/// asked to draw.
+///
+/// Roboto is LineXinBar's own and is what nearly all of this is set in: it
+/// carries Latin, Latin Extended, Greek and Cyrillic, which covers eight of
+/// the nine languages [`crate::i18n`] is written in. It carries no Devanagari
+/// and no Han at all, so the Hindi and Chinese columns would be nothing but
+/// `.notdef` boxes without the two Noto faces beside it.
+///
+/// Bundled rather than resolved through fontconfig, on the same terms as every
+/// other asset here: this is a login screen, and it may be the first thing a
+/// machine draws — including a machine installed without a single font package
+/// on it. A greeter that came up in tofu because the desktop's fonts were not
+/// installed yet would be unreadable at exactly the moment nobody can do
+/// anything about it.
+///
+/// The Noto faces are *subsets*. Devanagari is cut to the whole script, so an
+/// account named in it draws too; the Han face is cut to the characters this
+/// program's own words are made of, because the whole of Noto Sans CJK is
+/// twenty megabytes and a login screen is not the place to carry a font of
+/// that size for a hundred and fifty characters. An account or a session named
+/// in Han therefore falls back to whatever the machine has installed — which
+/// on a machine with a Chinese desktop on it is a full CJK face, and on one
+/// without is a machine with no Han names to draw.
+const UI_FACES: [&[u8]; 6] = [
+    include_bytes!("../../assets/fonts/Roboto-Regular.ttf"),
+    include_bytes!("../../assets/fonts/Roboto-Bold.ttf"),
+    include_bytes!("../../assets/fonts/NotoSansDevanagariUI-Regular.ttf"),
+    include_bytes!("../../assets/fonts/NotoSansDevanagariUI-Bold.ttf"),
+    include_bytes!("../../assets/fonts/NotoSansCJKsc-Regular.ttf"),
+    include_bytes!("../../assets/fonts/NotoSansCJKsc-Bold.ttf"),
+];
+
+/// Put the shipped faces into a font database.
+///
+/// Shared with the check that every word this greeter ships can be drawn by a
+/// face this greeter ships, which loads them into an *empty* database: that
+/// check is about a machine with nothing else installed, and it only proves
+/// something if it is looking at the same six faces the renderer loads.
+pub fn load_ui_faces(database: &mut glyphon::cosmic_text::fontdb::Database) {
+    for face in UI_FACES {
+        database.load_font_data(face.to_vec());
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 pub struct Quad {
@@ -517,10 +560,12 @@ impl Renderer {
             config.height,
         );
 
+        // The machine's own fonts as well as the shipped ones. Nothing this
+        // greeter *says* depends on them — see [`UI_FACES`] — but an account
+        // or a session named in a script none of the six faces carries is
+        // somebody's actual name, and where the machine can draw it, it should.
         let mut font_system = FontSystem::new();
-        for face in [UI_FONT_REGULAR, UI_FONT_BOLD] {
-            font_system.db_mut().load_font_data(face.to_vec());
-        }
+        load_ui_faces(font_system.db_mut());
         let swash_cache = SwashCache::new();
         let text_cache = Cache::new(&device);
         let viewport = Viewport::new(&device, &text_cache);
@@ -1431,8 +1476,142 @@ fn whole(texture: &wgpu::Texture) -> wgpu::TexelCopyTextureInfo<'_> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
+    use crate::i18n;
+
+    /// Shape `content` with nothing but the faces this greeter ships, and
+    /// report the width it came out and whether every character in it drew.
+    ///
+    /// An empty [`glyphon::cosmic_text::fontdb::Database`] is the whole point:
+    /// `FontSystem::new()` scans the machine's fonts, so a check run through
+    /// it would pass on this desk and say nothing about the machine that
+    /// installs this greeter and no desktop.
+    fn shipped_fonts() -> std::sync::MutexGuard<'static, FontSystem> {
+        static FONTS: std::sync::OnceLock<std::sync::Mutex<FontSystem>> =
+            std::sync::OnceLock::new();
+        FONTS
+            .get_or_init(|| {
+                let mut fonts = FontSystem::new_with_locale_and_db(
+                    "en-US".to_string(),
+                    glyphon::cosmic_text::fontdb::Database::new(),
+                );
+                load_ui_faces(fonts.db_mut());
+                std::sync::Mutex::new(fonts)
+            })
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
+    fn shape(content: &str, size: f32, bold: bool) -> (f32, bool) {
+        let mut fonts = shipped_fonts();
+        let fonts = &mut *fonts;
+        let mut buffer = TextBuffer::new(fonts, Metrics::new(size, size * 1.25));
+        let attrs = Attrs::new().family(Family::Name(UI_FONT)).weight(if bold {
+            Weight::BOLD
+        } else {
+            Weight::NORMAL
+        });
+        buffer.set_text(content, &attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(fonts, false);
+        let mut width: f32 = 0.0;
+        let mut drawn = true;
+        for run in buffer.layout_runs() {
+            width = width.max(run.line_w);
+            // Glyph zero is `.notdef`, which is the empty box a reader sees
+            // where no face on the machine had the character.
+            drawn &= run.glyphs.iter().all(|glyph| glyph.glyph_id != 0);
+        }
+        (width, drawn)
+    }
+
+    /// How far a text run reaches past the rectangle it was given.
+    ///
+    /// Laid out exactly as [`Renderer::prepare_text`] lays it out — the same
+    /// faces, the same metrics, the same box — and then asked two questions.
+    /// Does any line reach past the right-hand edge, which is what happens
+    /// where a single word is wider than the box and there is nowhere to break
+    /// it; and did it wrap onto more lines than the box has room to show. Both
+    /// are cut rather than wrapped when they reach the screen, so both are
+    /// half a sentence.
+    ///
+    /// How many lines a box holds is worked out from the *ink* rather than
+    /// from the line boxes: every line but the last needs its full leading,
+    /// and the last needs only as much as the letters themselves. Several
+    /// rectangles here are cut to the writing they hold rather than to the
+    /// leading around it — the clock is the obvious one, and the labels along
+    /// the bottom row are the tight one — and a check measured in line boxes
+    /// would be reporting the space under the last baseline as a missing
+    /// sentence.
+    ///
+    /// Returns the pixels past the right-hand edge, and the number of lines
+    /// there was no room for.
+    pub(crate) fn overflow(text: &Text) -> (f32, usize) {
+        let mut fonts = shipped_fonts();
+        let fonts = &mut *fonts;
+        let line_height = text.size * 1.25;
+        let mut buffer = TextBuffer::new(fonts, Metrics::new(text.size, line_height));
+        // Bounded across and unbounded down. The width is what makes the run
+        // wrap at all, and it is the box's; the height is deliberately left
+        // off, because a `Buffer` given one lays out only the lines that fit
+        // inside it and quietly drops the rest — which is precisely the
+        // overflow being looked for. The box's own height is compared against
+        // the line count below instead.
+        buffer.set_size(Some(text.rect[2]), None);
+        let attrs = Attrs::new()
+            .family(Family::Name(UI_FONT))
+            .weight(if text.bold {
+                Weight::BOLD
+            } else {
+                Weight::NORMAL
+            });
+        buffer.set_text(&text.content, &attrs, Shaping::Advanced, None);
+        buffer.shape_until_scroll(fonts, false);
+        let mut widest: f32 = 0.0;
+        let mut lines = 0usize;
+        for run in buffer.layout_runs() {
+            widest = widest.max(run.line_w);
+            lines += 1;
+        }
+        let room = (1.0 + ((text.rect[3] - text.size) / line_height).floor().max(0.0)) as usize;
+        ((widest - text.rect[2]).max(0.0), lines.saturating_sub(room))
+    }
+
+    /// Every word this greeter ships, drawn by a face this greeter ships.
+    ///
+    /// This is the check that makes nine languages real rather than nine
+    /// catalogues. Roboto has no Devanagari and no Han in it, so before the
+    /// two Noto faces were bundled every sentence of the Hindi and Chinese
+    /// columns rasterised to a row of empty boxes — and nothing else in the
+    /// build, and no test that reads strings rather than glyphs, would have
+    /// said a word about it.
+    #[test]
+    fn every_shipped_word_can_be_drawn_by_a_shipped_face() {
+        for language in i18n::ALL {
+            for message in language.strings().every_message() {
+                for bold in [false, true] {
+                    let (width, drawn) = shape(message, 17.0, bold);
+                    assert!(
+                        drawn,
+                        "{}: {message:?} has a character no shipped face can draw",
+                        language.endonym()
+                    );
+                    assert!(
+                        width > 0.0,
+                        "{}: {message:?} drew nothing at all",
+                        language.endonym()
+                    );
+                }
+            }
+        }
+        // And the check has teeth: a script none of the six faces carries is
+        // reported as undrawable rather than passing quietly. Without this,
+        // a `shape` that silently found nothing would pass everything above.
+        assert!(
+            !shape("한글 ᚠᚢᚦ", 17.0, false).1,
+            "a script no shipped face carries was reported as drawable"
+        );
+    }
 
     /// The greeter's own marks have to be in the binary, have to draw
     /// something, and have to be made of the same material as each other —

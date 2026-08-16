@@ -1,5 +1,6 @@
 //! Enumerate interactive local accounts without depending on a desktop stack.
 
+use crate::i18n;
 use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -19,12 +20,18 @@ pub enum LoginNameError {
 }
 
 impl LoginNameError {
-    pub const fn message(self) -> &'static str {
+    /// What is written under the field, in the machine's language.
+    ///
+    /// Still a `&'static str`: the language is settled before the first frame
+    /// and does not move again, so a refusal held in the screen's state is
+    /// held in the language it will be read in.
+    pub fn message(self) -> &'static str {
+        let text = i18n::text();
         match self {
-            Self::Empty => "Enter an account name.",
-            Self::TooLong => "That account name is too long.",
-            Self::Whitespace => "Account names cannot contain spaces.",
-            Self::ControlCharacter => "That account name contains an invalid character.",
+            Self::Empty => text.name_empty,
+            Self::TooLong => text.name_too_long,
+            Self::Whitespace => text.name_whitespace,
+            Self::ControlCharacter => text.name_control,
         }
     }
 }

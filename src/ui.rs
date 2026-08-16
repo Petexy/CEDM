@@ -14,6 +14,7 @@
 //! the handover.
 
 use crate::displays::Display;
+use crate::i18n;
 use crate::keyboard::{self, Arrow, Board, Key, Latch};
 use crate::power;
 use crate::sessions::Session;
@@ -167,7 +168,7 @@ impl FooterItem {
     pub fn label(self) -> &'static str {
         match self {
             Self::Power(action) => action.label(),
-            Self::DifferentUser => "Different User",
+            Self::DifferentUser => i18n::text().different_user_action,
         }
     }
 
@@ -1124,7 +1125,10 @@ fn build_identity(
     let selected = if other { 0 } else { view.selected_user };
     let focused = view.focus == Focus::Users && view.phase.choosing();
     let travel = layout.content_w * CAROUSEL_TRAVEL;
-    let greeting = view.now.map(|now| now.greeting()).unwrap_or("Welcome back");
+    let greeting = view
+        .now
+        .map(|now| now.greeting())
+        .unwrap_or(i18n::text().welcome_back);
 
     let drawn: &[usize] = &if other {
         vec![usize::MAX]
@@ -1158,7 +1162,7 @@ fn build_identity(
                 user.avatar.as_ref().and_then(|_| visual::face_slot(index)),
             ),
             // The account nobody enumerated has no picture to have published.
-            None => ("Different user", "+".to_string(), None),
+            None => (i18n::text().different_user_profile, "+".to_string(), None),
         };
         avatar_surface(
             &mut output.scene,
@@ -1319,7 +1323,7 @@ fn build_session(
         .sessions
         .get(view.selected_session)
         .map(|session| session.name.as_str())
-        .unwrap_or("No sessions found");
+        .unwrap_or(i18n::text().no_sessions);
     let label_x = layout.session[0] + layout.session[2] + 12.0 * metrics.scale.max(0.8);
     text(
         &mut output.scene,
@@ -1489,7 +1493,7 @@ fn build_centre(
             view,
             layout,
             metrics,
-            "Account name",
+            i18n::text().account_name,
             false,
             input,
             error,
@@ -1582,7 +1586,7 @@ fn build_sign_in(
     );
     text(
         &mut output.scene,
-        "Sign in",
+        i18n::text().sign_in,
         field_text_box(layout, metrics),
         if metrics.compact {
             16.0
@@ -1767,7 +1771,7 @@ fn build_status(
         );
         text(
             &mut output.scene,
-            "Try again",
+            i18n::text().try_again,
             field_text_box(layout, metrics),
             label_size,
             palette.text.a(fade),
@@ -2651,6 +2655,124 @@ mod tests {
     /// true of the only display is true of each of a row of them.
     fn one_display(view: View<'_>, width: f32, height: f32) -> Output {
         build(view, &[Display::whole(width, height)])
+    }
+
+    /// Nine languages, and every one of them has to fit where it is written.
+    ///
+    /// This is the check that a translation is a translation rather than a
+    /// longer sentence in the same box. Nothing here wraps onto the column:
+    /// the reserved line under the button is one line tall at every size, the
+    /// caps of the on-screen keyboard are the width of the keys under them,
+    /// and text laid out past its rectangle is *cut* — so a sentence that does
+    /// not fit is not a longer sentence, it is half a sentence, and the half
+    /// that is missing is the end of it.
+    ///
+    /// Measured by shaping each run exactly as the renderer will, in the faces
+    /// this greeter ships, on the displays it will be put on. A word that has
+    /// to be shortened is shortened in [`crate::i18n`], which is the only
+    /// place any of them are written.
+    #[test]
+    fn no_translation_overflows_the_place_it_is_written() {
+        let users = [user("Alex")];
+        let sessions = [session("LineXinBar")];
+        let board = Board::default();
+        for language in i18n::ALL {
+            i18n::with_language(language, || {
+                let strings = language.strings();
+                // Every sentence that can stand on the reserved line under the
+                // button, including the longest of the power refusals: those
+                // are the greeter's own words wrapped around a translated
+                // action, so they are the longest thing this screen ever says.
+                let refusals = [
+                    power::Action::ShutDown.refusal(),
+                    i18n::fill(strings.power_unavailable, power::Action::Restart.label()),
+                    i18n::fill(strings.power_not_in_preview, power::Action::Restart.label()),
+                    strings.incorrect_account_or_password.to_string(),
+                    strings.worker_unavailable.to_string(),
+                    strings.attempt_lost.to_string(),
+                    strings.service_refused.to_string(),
+                ];
+                let mut phases = vec![
+                    Phase::Choose,
+                    Phase::Username {
+                        input: "",
+                        error: Some(strings.name_whitespace),
+                    },
+                    Phase::Username {
+                        input: "",
+                        error: Some(strings.name_control),
+                    },
+                    Phase::Authenticating {
+                        prompt: strings.password,
+                        secret: true,
+                        input: "",
+                    },
+                    Phase::Busy(strings.starting_authentication),
+                    Phase::Busy(strings.checking),
+                    Phase::Departing(strings.opening_session),
+                ];
+                phases.extend(refusals.iter().map(|message| Phase::Error(message)));
+
+                for (width, height) in [(1280.0, 720.0), (1920.0, 1080.0), (3840.0, 2160.0)] {
+                    for phase in &phases {
+                        // Once with the board down and once with it up, because
+                        // the caps are only in the scene while it is up.
+                        for board in [None, Some(&board)] {
+                            let mut view =
+                                view(&users, &sessions, *phase, Focus::Prompt, FOOTER.as_slice());
+                            view.keyboard = board;
+                            view.keyboard_arrival = 1.0;
+                            let output = one_display(view, width, height);
+                            for text in &output.scene.texts {
+                                let (right, lines_over) = crate::visual::tests::overflow(text);
+                                assert!(
+                                    right <= 0.5 && lines_over == 0,
+                                    "{}: {:?} runs {right:.1}px past the right of its \
+                                     {:.0}x{:.0} box and wraps onto {lines_over} line(s) \
+                                     it has no room for, at {width}x{height}",
+                                    language.endonym(),
+                                    text.content,
+                                    text.rect[2],
+                                    text.rect[3],
+                                );
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // And the check has teeth. The reserved line under the button is one
+        // line at every size, so a sentence half again as long as the longest
+        // one shipped has to be reported as running off it — a check that let
+        // everything above through by measuring nothing would look identical
+        // from here.
+        let sprawling = "Ta nazwa konta zawiera nieprawidłowy znak, a hasło do niej \
+                         nie zostało przyjęte przez usługę logowania."
+            .to_string();
+        let output = one_display(
+            view(
+                &users,
+                &sessions,
+                Phase::Error(&sprawling),
+                Focus::Continue,
+                FOOTER.as_slice(),
+            ),
+            1280.0,
+            720.0,
+        );
+        assert!(
+            output
+                .scene
+                .texts
+                .iter()
+                .filter(|text| text.content == sprawling)
+                .any(|text| {
+                    let (right, lines_over) = crate::visual::tests::overflow(text);
+                    right > 0.5 || lines_over > 0
+                }),
+            "a sentence too long for the reserved line was not reported as one"
+        );
     }
 
     fn hit(output: &Output, target: Target) -> [f32; 4] {

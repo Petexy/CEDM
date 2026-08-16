@@ -1,4 +1,14 @@
 //! The LineXinBar on-screen keyboard's model and exact ANSI geometry.
+//!
+//! The character keys are not translated and never will be. This is a picture
+//! of a keyboard, laid out in ANSI's own widths, and the letters printed on it
+//! are the letters it types — a board whose caps said one thing and typed
+//! another would be worse in every language than one that says QWERTY. What
+//! the machine's language does decide is the handful of caps that are *words*:
+//! see [`crate::i18n`], where the rule is that a legend stays Latin wherever
+//! that language's own keyboards carry Latin legends.
+
+use crate::i18n;
 
 const NUMBER_ROW: (&str, &str) = ("`1234567890-=", "~!@#$%^&*()_+");
 const UPPER_ROW: (&str, &str) = ("qwertyuiop[]", "QWERTYUIOP{}");
@@ -25,15 +35,28 @@ pub enum Key {
 
 impl Key {
     pub fn cap(self, shifted: bool) -> String {
+        let text = i18n::text();
         match self {
             Self::Char(_, shifted_character) if shifted => shifted_character.to_string(),
             Self::Char(character, _) => character.to_string(),
-            Self::Named(cap, _) => cap.to_string(),
+            // Keyed off the stroke rather than off the English cap beside it,
+            // so the function row — which is `F1` on every keyboard ever sold
+            // — falls through to the name it was built with and nothing has to
+            // list twelve keys that are the same in every language.
+            Self::Named(cap, stroke) => match stroke {
+                Stroke::Named("Escape") => text.key_escape,
+                Stroke::Named("BackSpace") => text.key_backspace,
+                Stroke::Named("Tab") => text.key_tab,
+                Stroke::Named("Return") => text.key_enter,
+                Stroke::Char(' ') => text.key_space,
+                _ => cap,
+            }
+            .to_string(),
             Self::Arrow(_) | Self::Close => String::new(),
-            Self::Shift => "Shift".to_string(),
-            Self::Caps => "Caps".to_string(),
-            Self::Ctrl => "Ctrl".to_string(),
-            Self::Alt => "Alt".to_string(),
+            Self::Shift => text.key_shift.to_string(),
+            Self::Caps => text.key_caps.to_string(),
+            Self::Ctrl => text.key_ctrl.to_string(),
+            Self::Alt => text.key_alt.to_string(),
         }
     }
 
@@ -332,5 +355,40 @@ mod tests {
         let board = Board::default();
         assert_eq!(board.selected(), (3, 1));
         assert_eq!(row_spans(3)[1].0, Key::Char('a', 'A'));
+    }
+
+    /// What the board types is the board's, and what it *says* is the
+    /// language's. A cap that moved a letter would be a keyboard that lies.
+    #[test]
+    fn the_letters_are_the_boards_and_the_words_are_the_languages() {
+        for language in i18n::ALL {
+            i18n::with_language(language, || {
+                for row in 0..ROW_COUNT {
+                    for (key, _) in row_spans(row) {
+                        if let Key::Char(plain, upper) = key {
+                            assert_eq!(key.cap(false), plain.to_string());
+                            assert_eq!(key.cap(true), upper.to_string());
+                        }
+                    }
+                }
+                // The function row is `F1` on every keyboard ever sold.
+                assert_eq!(row_spans(0)[1].0.cap(false), "F1");
+            });
+        }
+        i18n::with_language(i18n::Language::German, || {
+            assert_eq!(Key::Ctrl.cap(false), "Strg");
+            assert_eq!(Key::Shift.cap(false), "Umschalt");
+            assert_eq!(Key::Named("Enter", Stroke::ENTER).cap(false), "Enter");
+        });
+        i18n::with_language(i18n::Language::French, || {
+            assert_eq!(Key::Named("Enter", Stroke::ENTER).cap(false), "Entrée");
+            assert_eq!(Key::Named("Space", Stroke::SPACE).cap(false), "Espace");
+        });
+        // A Russian keyboard has `Shift` written on it. A board that said
+        // anything else would be a board nobody has ever seen.
+        i18n::with_language(i18n::Language::Russian, || {
+            assert_eq!(Key::Shift.cap(false), "Shift");
+            assert_eq!(Key::Ctrl.cap(false), "Ctrl");
+        });
     }
 }

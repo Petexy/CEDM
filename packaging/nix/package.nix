@@ -112,6 +112,8 @@ rustPlatform.buildRustPackage {
       "$out/share/licenses/cedm/GPL-3.0-only.txt"
     install -Dm0644 assets/fonts/LICENSE.txt \
       "$out/share/licenses/cedm/Roboto-Apache-2.0.txt"
+    install -Dm0644 assets/fonts/LICENSE-NotoSans.txt \
+      "$out/share/licenses/cedm/NotoSans-OFL-1.1.txt"
     install -Dm0644 README.md \
       "$out/share/doc/cedm/README.md"
     install -Dm0644 contrib/config.toml.example \

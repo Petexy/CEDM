@@ -139,8 +139,12 @@ pub fn parse(path: &Path, kind: Kind) -> Option<Session> {
             continue;
         };
         let key = key.trim();
-        // Keep the unqualified name/comment; locale selection is a renderer concern.
-        if key.contains('[') {
+        // A desktop entry carries its own translations, and they are the only
+        // ones there can be: a desktop's name is the desktop's to translate,
+        // and nothing in this greeter could know that GNOME's Polish entry
+        // says "GNOME na Xorgu". Every other localised key is dropped — the
+        // two the login screen reads are the two it keeps.
+        if key.contains('[') && !localisable(key) {
             continue;
         }
         fields
@@ -162,7 +166,11 @@ pub fn parse(path: &Path, kind: Kind) -> Option<Session> {
     {
         return None;
     }
-    let name = fields.remove("Name")?;
+    // The unqualified `Name` is required whether or not a translation of it
+    // exists: an entry that has only `Name[pl]` is a malformed entry, and one
+    // this greeter would otherwise show to Polish readers and hide from
+    // everybody else.
+    let name = translated(&fields, "Name", crate::i18n::language())?;
     if fields
         .get("TryExec")
         .is_some_and(|command| !executable_available(command))
@@ -197,13 +205,52 @@ pub fn parse(path: &Path, kind: Kind) -> Option<Session> {
     Some(Session {
         id,
         name,
-        comment: fields.remove("Comment"),
+        comment: translated(&fields, "Comment", crate::i18n::language()),
         command,
         desktop_names,
         kind,
         source: path.to_path_buf(),
         line_xin_bar,
     })
+}
+
+/// The two keys a desktop entry may carry a translation of that this greeter
+/// reads. Everything else localised in an entry is about a menu it is not in.
+fn localisable(key: &str) -> bool {
+    key.starts_with("Name[") || key.starts_with("Comment[")
+}
+
+/// `key`'s value in `language`, falling back to the entry's unqualified one.
+///
+/// Desktop entries are keyed by POSIX locale names rather than by language
+/// tags, and by more than one of them: a Brazilian translation is `Name[pt_BR]`
+/// and a French one is usually `Name[fr]` but is `Name[fr_FR]` in entries
+/// written from a full locale. So the country-qualified spellings this
+/// language could be written as are tried in order, then the bare language,
+/// and then any country of it at all — which is the last one because
+/// `Name[pt_PT]` is a better answer for a Brazilian reader than English, and a
+/// worse one than `Name[pt_BR]`.
+///
+/// Modifiers are not stripped. `Name[sr@latin]` is a different translation
+/// from `Name[sr]`, not a spelling of it, and this greeter has no Serbian to
+/// choose between them with.
+fn translated(
+    fields: &BTreeMap<String, String>,
+    key: &str,
+    language: crate::i18n::Language,
+) -> Option<String> {
+    for candidate in language.desktop_keys() {
+        if let Some(value) = fields.get(&format!("{key}[{candidate}]")) {
+            return Some(value.clone());
+        }
+    }
+    let bare = language.desktop_keys().last()?;
+    let country = format!("{key}[{bare}_");
+    fields
+        .iter()
+        .find(|(candidate, _)| candidate.starts_with(&country))
+        .map(|(_, value)| value.clone())
+        .or_else(|| fields.get(key).cloned())
 }
 
 fn parse_exec(exec: &str, name: &str, icon: Option<&str>, source: &Path) -> Option<Vec<String>> {
@@ -294,6 +341,61 @@ fn is_executable(path: &Path) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A desktop's name is the desktop's own to translate, and an entry that
+    /// has translated it says so in its own file. Nothing in [`crate::i18n`]
+    /// could know what GNOME is called in Polish.
+    ///
+    /// The unqualified `Name` is what a reader whose language the entry does
+    /// not carry gets, and it is required either way: an entry with only a
+    /// `Name[pl]` is a malformed entry, not a session for Polish readers only.
+    #[test]
+    fn a_session_is_named_the_way_its_own_entry_names_it() {
+        let root = std::env::temp_dir().join(format!("cedm-session-name-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("plasma.desktop");
+        fs::write(
+            &path,
+            "[Desktop Entry]\n\
+             Name=Plasma (Wayland)\n\
+             Name[pl]=Plasma (Wayland)\n\
+             Name[zh_CN]=Plasma (Wayland 会话)\n\
+             Name[pt_PT]=Plasma (Wayland) PT\n\
+             Comment=Plasma by KDE\n\
+             Comment[de_DE]=Plasma von KDE\n\
+             Exec=/usr/bin/startplasma-wayland\n",
+        )
+        .unwrap();
+
+        for (language, name) in [
+            (crate::i18n::Language::English, "Plasma (Wayland)"),
+            (crate::i18n::Language::Chinese, "Plasma (Wayland 会话)"),
+            // No French translation in this entry, so the unqualified name.
+            (crate::i18n::Language::French, "Plasma (Wayland)"),
+            // No `Name[pt_BR]`, so the country of it that is there rather than
+            // an English name a Brazilian reader has less use for.
+            (crate::i18n::Language::Portuguese, "Plasma (Wayland) PT"),
+        ] {
+            crate::i18n::with_language(language, || {
+                assert_eq!(
+                    parse(&path, Kind::Wayland).unwrap().name,
+                    name,
+                    "{language:?}"
+                );
+            });
+        }
+        // A country-qualified key answers the bare language, which is how an
+        // entry written from a full locale is read.
+        crate::i18n::with_language(crate::i18n::Language::German, || {
+            assert_eq!(
+                parse(&path, Kind::Wayland).unwrap().comment.as_deref(),
+                Some("Plasma von KDE")
+            );
+        });
+
+        fs::remove_file(&path).unwrap();
+        fs::remove_dir(&root).unwrap();
+    }
 
     #[test]
     fn parses_line_xin_bar_without_hard_coding_its_install_location() {

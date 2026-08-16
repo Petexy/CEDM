@@ -192,6 +192,40 @@ if command -v systemd-analyze >/dev/null 2>&1 && [[ -x /usr/bin/greetd ]]; then
     systemd-analyze verify "$unit"
 fi
 
+# Every face in the binary needs a licence text shipped with it, and every
+# package format has to install both of them. The faces are compiled in with
+# `include_bytes!`, so a missing *font* fails the build loudly; a missing
+# licence fails nothing at all, and a package that drops one is a package that
+# redistributes a font without its terms.
+package_note "checking every bundled font has its licence, in every package"
+for licence in LICENSE.txt LICENSE-NotoSans.txt; do
+    [[ -f "$PROJECT_ROOT/assets/fonts/$licence" ]] \
+        || package_die "assets/fonts/$licence is missing"
+    # The three formats that keep a licence directory of their own.
+    for packager in "$PACKAGING_DIR/arch/PKGBUILD.in" "$PACKAGING_DIR/nix/package.nix" \
+        "$PACKAGING_DIR/fedora/$PACKAGE_NAME.spec"
+    do
+        grep -Fq "assets/fonts/$licence" "$packager" \
+            || package_die "${packager#"$PACKAGING_DIR"/} does not install assets/fonts/$licence"
+    done
+done
+# Debian is the exception, and deliberately: its licence record is the
+# copyright file, which points at the Apache text every Debian system already
+# carries in /usr/share/common-licenses. OFL-1.1 is not one of those, so that
+# text has to travel with the package or the copyright file sends a reader
+# nowhere.
+grep -Fq "assets/fonts/LICENSE-NotoSans.txt" "$PACKAGING_DIR/debian/build.sh" \
+    || package_die "debian/build.sh does not ship the Open Font Licence text"
+for pattern in "assets/fonts/Roboto-" "assets/fonts/NotoSans"; do
+    grep -Fq "$pattern" "$PACKAGING_DIR/debian/copyright" \
+        || package_die "debian/copyright does not account for $pattern*"
+done
+# And a face nothing loads is a face nobody checked the licence of.
+while IFS= read -r -d '' face; do
+    grep -Fq "assets/fonts/${face##*/}" "$PROJECT_ROOT/src/visual/mod.rs" \
+        || package_die "assets/fonts/${face##*/} is shipped but never loaded"
+done < <(find "$PROJECT_ROOT/assets/fonts" -name '*.ttf' -print0)
+
 package_note "checking every package enables the unit the same way"
 # Three package formats, three scriptlet languages, one behaviour: enable
 # cedm.service on a first install, refuse to take display-manager.service from

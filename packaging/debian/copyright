@@ -8,11 +8,24 @@ License: GPL-3.0-only
  The complete GNU General Public License version 3 is available in
  /usr/share/common-licenses/GPL-3 on Debian systems.
 
-Files: assets/fonts/*
+Files: assets/fonts/Roboto-*.ttf assets/fonts/LICENSE.txt
 Copyright: Christian Robertson
 License: Apache-2.0
  The complete Apache License version 2.0 is available in
  /usr/share/common-licenses/Apache-2.0 on Debian systems.
+
+Files: assets/fonts/NotoSans*.ttf assets/fonts/LICENSE-NotoSans.txt
+Copyright: 2022 The Noto Project Authors
+ 2014-2021 Adobe
+Comment: Subsets of Noto Sans Devanagari UI and Noto Sans CJK SC, cut down to
+ the characters this login screen draws. Roboto carries no Devanagari and no
+ Han, so without them the Hindi and Chinese columns are rows of empty boxes.
+ Neither family declares a Reserved Font Name, so the subsets keep their
+ original names.
+License: OFL-1.1
+ The complete SIL Open Font License version 1.1 is available in
+ /usr/share/doc/cedm/LICENSE-NotoSans.txt and at
+ https://openfontlicense.org.
 
 Files: assets/glyphs/*
 Copyright: 2026 Piotr Lewandowski and contributors

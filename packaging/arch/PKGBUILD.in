@@ -93,6 +93,8 @@ package() {
         "$pkgdir/usr/share/licenses/$pkgname/GPL-3.0-only.txt"
     install -Dm0644 assets/fonts/LICENSE.txt \
         "$pkgdir/usr/share/licenses/$pkgname/Roboto-Apache-2.0.txt"
+    install -Dm0644 assets/fonts/LICENSE-NotoSans.txt \
+        "$pkgdir/usr/share/licenses/$pkgname/NotoSans-OFL-1.1.txt"
     install -Dm0644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
     install -Dm0644 contrib/config.toml.example \
         "$pkgdir/usr/share/doc/$pkgname/config.example.toml"
