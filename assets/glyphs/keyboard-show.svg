@@ -8,74 +8,28 @@
   it. A picture that reads instantly is worse than a word when it reads
   instantly wrong.
 
-  Moulded rather than outlined, unlike its mirror, and the two are not meant to
+  A slab rather than an outline, unlike its mirror, and the two are not meant to
   match: this one stands on the column beside the session badge, among objects,
   and `keyboard-hide.svg` is a cap on a key of the board itself, among the
-  arrows and the letters. `lxb-desktop` draws the same division — its guide's
-  objects are moulded and its key caps and controller hints are line art — and a
-  flat mark among moulded ones reads as the one control that has not finished
-  loading.
+  arrows and the letters.
 
-  The keys are cut through the slab rather than raised on it. Every other detail
-  in this set is a highlight, and a highlight cannot show on a white face at the
-  size a footer glyph is drawn — but a hole can, because what comes through it
-  is whatever the button is made of. It is also the truer picture: keycaps seen
-  from above under a lamp are the dark part of a keyboard.
+  The keys are cut through the slab. They were holes in the painted drawing too,
+  and for a reason that has outlived it: a keycap seen from above under a lamp
+  is the dark part of a keyboard. What the material adds is that a hole is now
+  free — its edge is an edge like the outside one, so each key gets the same
+  wall round it, arriving from the other side.
 
-  Authored in white and greys, because the greeter tints what it draws: an
-  atlas quad's colour is multiplied into the texel, so anything lighter than
-  white is unreachable and anything coloured could only come out muddier than
-  the label beside it. The greys are not a colour — they are the shading.
+  Four in the top rank rather than five. At the size a control on the column is
+  drawn, five slots and the walls between them average into one band, and a
+  keyboard with a smear across it is not a keyboard.
+
+  lxb:shape — the material is computed from this outline; see
+  src/visual/field.rs, which is where that is explained.
 -->
+
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
   <defs>
-    <!-- The material, and the lamp above it. Identical in every moulded glyph
-         of this set on purpose. -->
-    <linearGradient id="face" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#f8f8f8"/>
-      <stop offset="0.3" stop-color="#eeeeee"/>
-      <stop offset="0.56" stop-color="#d4d4d4"/>
-      <stop offset="0.78" stop-color="#dfdfdf"/>
-      <stop offset="1" stop-color="#fafafa"/>
-    </linearGradient>
-    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="0.76" stop-color="#ffffff" stop-opacity="0.96"/>
-      <stop offset="1" stop-color="#ffffff" stop-opacity="0.86"/>
-    </linearGradient>
-    <linearGradient id="edge" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#ffffff" stop-opacity="0.98"/>
-      <stop offset="0.2" stop-color="#ffffff" stop-opacity="0"/>
-      <stop offset="0.86" stop-color="#ffffff" stop-opacity="0"/>
-      <stop offset="1" stop-color="#ffffff" stop-opacity="0.62"/>
-    </linearGradient>
-    <linearGradient id="turn" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#000000" stop-opacity="0.11"/>
-      <stop offset="0.2" stop-color="#000000" stop-opacity="0"/>
-      <stop offset="0.8" stop-color="#000000" stop-opacity="0"/>
-      <stop offset="1" stop-color="#000000" stop-opacity="0.15"/>
-    </linearGradient>
-    <filter id="drop" x="-35%" y="-35%" width="180%" height="190%">
-      <feDropShadow dx="0.45" dy="1.05" stdDeviation="0.46"
-                    flood-color="#303030" flood-opacity="0.48"/>
-    </filter>
-    <filter id="lift" x="-45%" y="-45%" width="200%" height="210%">
-      <feDropShadow dx="0.25" dy="0.5" stdDeviation="0.22"
-                    flood-color="#252525" flood-opacity="0.48"/>
-    </filter>
-    <filter id="polish" x="-10%" y="-10%" width="120%" height="120%">
-      <feGaussianBlur stdDeviation="0.15"/>
-    </filter>
-
     <rect id="slab" x="3.6" y="13.9" width="24.8" height="14.4" rx="2.7"/>
-    <!-- The polish, its lower edge bowed to follow the slab's own swell. A
-         boundary ruled straight across turns a dome into a sawn cylinder. -->
-    <path id="slab-gloss" d="M2 12.8h28v6.9c-7 2.1-21 2.1-28 0z"/>
-    <!-- The keys, as holes: two ranks and a space bar, which is as much of a
-         keyboard as survives being drawn at the height of a keycap. Four in
-         the top rank rather than five: at the size a control on the column is
-         drawn, five slots and the walls between them average into one grey
-         band, and a keyboard with a smear across it is not a keyboard. -->
     <g id="keys">
       <rect x="7.2" y="17.0" width="2.6" height="2.6" rx="0.8"/>
       <rect x="12.2" y="17.0" width="2.6" height="2.6" rx="0.8"/>
@@ -85,42 +39,16 @@
       <rect x="22.2" y="21.4" width="2.6" height="2.6" rx="0.8"/>
       <rect x="12.2" y="21.4" width="7.6" height="2.6" rx="0.9"/>
     </g>
-    <mask id="slab-mask" maskUnits="userSpaceOnUse" x="0" y="0" width="32" height="32">
-      <use href="#slab" fill="#ffffff"/>
+    <!-- Up, and in. -->
+    <path id="bolt" d="M16 2.3 22.1 10.5h-12.2z"/>
+    <g id="bead"><use href="#slab"/><use href="#bolt"/></g>
+    <mask id="pierced">
+      <use href="#bead" fill="#ffffff"/>
       <use href="#keys" fill="#000000"/>
     </mask>
-    <clipPath id="slab-clip"><use href="#slab"/></clipPath>
-
-    <!-- Up, and in. -->
-    <path id="bolt" d="M16 1.7 22.1 9.9h-12.2z"/>
-    <path id="bolt-gloss" d="M9 1h14v4.4c-3.6 1.5-10.4 1.5-14 0z"/>
-    <clipPath id="bolt-clip"><use href="#bolt"/></clipPath>
   </defs>
 
-  <g filter="url(#lift)">
-    <use href="#bolt" fill="url(#face)"/>
-    <g clip-path="url(#bolt-clip)">
-      <use href="#bolt-gloss" fill="url(#gloss)" filter="url(#polish)"/>
-    </g>
-    <use href="#bolt" fill="url(#turn)"/>
-    <use href="#bolt" fill="none" stroke="url(#edge)" stroke-width="0.8"/>
-  </g>
-
-  <g filter="url(#drop)">
-    <g mask="url(#slab-mask)">
-      <use href="#slab" fill="url(#face)"/>
-      <g clip-path="url(#slab-clip)">
-        <use href="#slab-gloss" fill="url(#gloss)" filter="url(#polish)"/>
-      </g>
-      <use href="#slab" fill="url(#turn)"/>
-      <!-- The lit lip each key is sunk behind: the wall on the far side of the
-           hole, turned up into the lamp. Inside the mask, so it stops at the
-           slab's own edge. -->
-      <g transform="translate(0 0.42)">
-        <use href="#keys" fill="none" stroke="#ffffff" stroke-opacity="0.5"
-             stroke-width="0.45"/>
-      </g>
-    </g>
-    <use href="#slab" fill="none" stroke="url(#edge)" stroke-width="1"/>
+  <g mask="url(#pierced)">
+    <use href="#bead" fill="#ffffff"/>
   </g>
 </svg>

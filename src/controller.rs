@@ -17,6 +17,16 @@ pub enum Action {
     Up,
     Down,
     Accept,
+    /// Start — Accept everywhere except over the on-screen keyboard, where it
+    /// is the one press that finishes typing: Enter, and the board away.
+    ///
+    /// It is folded into [`Action::Accept`] on its way in whenever the board is
+    /// not up (see `Application::apply_action`), because that is the only place
+    /// the two differ and nothing behind the board should have to know there
+    /// are two. A field being filled in ends with Enter and then with the
+    /// keyboard gone, which on a pad is two presses at opposite ends of the
+    /// board, and Start is the button every console has already taught for it.
+    Submit,
     Back,
     ToggleKeyboard,
     Previous,
@@ -135,7 +145,9 @@ impl Controller {
             digital[Direction::Down.index()] |= frame.held.has(Buttons::DOWN);
             for (button, action) in [
                 (Buttons::A, Action::Accept),
-                (Buttons::MENU, Action::Accept),
+                // The pad's own Start, and the same button as every other
+                // pad's: Accept, except over the board. See [`Action::Submit`].
+                (Buttons::MENU, Action::Submit),
                 (Buttons::B, Action::Back),
                 (Buttons::Y, Action::ToggleKeyboard),
                 (Buttons::L1, Action::Previous),
@@ -210,13 +222,21 @@ fn update_axis(
 
 fn button_action(button: Button, raw: u32) -> Option<Action> {
     match button {
-        Button::South | Button::Start => Some(Action::Accept),
+        Button::South => Some(Action::Accept),
+        // Start — Xbox Menu, the PlayStation Options button, Steam Deck's own
+        // `≡`. Accept, like `A`, everywhere but over the on-screen keyboard,
+        // where it is Enter and the way out of the board in one press. See
+        // [`Action::Submit`].
+        Button::Start => Some(Action::Submit),
         Button::East => Some(Action::Back),
         Button::North => Some(Action::ToggleKeyboard),
         Button::LeftTrigger => Some(Action::Previous),
         Button::RightTrigger => Some(Action::Next),
         Button::Unknown => match raw & 0xffff {
-            0x130 | 0x13b | 0x120 => Some(Action::Accept),
+            // `BTN_SOUTH`, and `BTN_TRIGGER` for a pad numbered as a joystick.
+            0x130 | 0x120 => Some(Action::Accept),
+            // `BTN_START`.
+            0x13b => Some(Action::Submit),
             0x131 | 0x121 => Some(Action::Back),
             0x134 | 0x123 => Some(Action::ToggleKeyboard),
             0x136 => Some(Action::Previous),

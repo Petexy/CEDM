@@ -1073,29 +1073,88 @@ fn build_column(output: &mut Output, layout: Layout, metrics: Metrics, fade: f32
 }
 
 /// The time, large, on the half of the display the column does not cover.
+///
+/// The hour is drawn in the material the marks on the column are drawn in — a
+/// bead of water under one lamp — rather than as flat coverage through the text
+/// pipeline. It is `lxb-desktop`'s own clock: the shell draws the corner of the
+/// start screen this way, this screen hands over to that one within a few
+/// seconds, and a clock that changed material at the handover would be the seam
+/// this project spends most of its length avoiding. See [`visual::letters`].
+///
+/// The date under it cannot follow and is not meant to. It is *words* — nine
+/// languages, in Latin, Cyrillic, Devanagari and Han — and a cell per codepoint
+/// is not a text renderer. It stays a text run, in the same colour, which is
+/// what keeps the two lines one object: the tint carries the accent, the
+/// material carries the hour.
 fn build_clock(output: &mut Output, view: &View<'_>, layout: Layout, fade: f32) {
     let palette = theme::theme();
     let Some(now) = view.now.filter(|_| layout.split) else {
         return;
     };
-    text(
+    // The accent's own pale cast rather than the near-white the rest of the
+    // interface is lettered in: the clock stands on the wallpaper with nothing
+    // behind it, and it is the one thing on this screen that says which palette
+    // the account being signed into keeps. See [`crate::accent`], which is where
+    // that answer is read from.
+    clock_time(
         &mut output.scene,
         &now.time(),
         layout.clock,
         layout.clock[3] / 1.22,
-        palette.text.a(0.97 * fade),
-        true,
-        TextAlign::Center,
+        palette.text_soft.a(0.97 * fade),
     );
     text(
         &mut output.scene,
         &now.date(),
         layout.date,
         layout.date[3],
-        palette.text.a(0.88 * fade),
+        palette.text_soft.a(0.88 * fade),
         false,
         TextAlign::Center,
     );
+}
+
+/// The hour, letter by letter, centred in `rect` and standing on its baseline.
+///
+/// One quad per character, each pointing at a cell that holds a *measurement* of
+/// that character's shape — so the shader models it as the same water it models
+/// a mark with. `colour`'s alpha travels in `fade` rather than in the colour,
+/// because on a measured shape the colour is the stain and `fade` is how solid
+/// the mark is; a letter that faded through its colour would grow clearer
+/// instead of fainter.
+///
+/// Nothing is drawn at all if the time holds a character the clock's own
+/// alphabet does not — see [`visual::letters::run`].
+fn clock_time(scene: &mut Scene, time: &str, rect: [f32; 4], size: f32, colour: [f32; 4]) {
+    let Some(run) = visual::letters::run(time) else {
+        return;
+    };
+    let width = run.iter().map(|letter| letter.advance).sum::<f32>() * size;
+    let side = visual::letters::LETTER_BOX * size;
+    // Every letter is drawn in a square of the same size, so the bevel the
+    // shader gives each of them is the same depth: a colon in a box its own size
+    // would be modelled twice as deeply as the digits beside it. What moves per
+    // letter is only where that square is centred.
+    let middle = rect[1] + (visual::letters::BASELINE - visual::letters::LETTER_MIDDLE) * size;
+    let mut pen = rect[0] + (rect[2] - width) * 0.5;
+    for letter in run {
+        // `shaded` is what gives the quad its depth and its light, which is also
+        // what says its cell holds a shape rather than a picture — the letters go
+        // through the same door the marks do.
+        scene.quads.push(shaded(Quad {
+            rect: [
+                pen + letter.advance * size * 0.5 - side * 0.5,
+                middle - side * 0.5,
+                side,
+                side,
+            ],
+            slot: letter.cell,
+            color: [colour[0], colour[1], colour[2], 1.0],
+            fade: colour[3],
+            ..Quad::default()
+        }));
+        pen += letter.advance * size;
+    }
 }
 
 /// Who is signing in: the avatar, the greeting, and the name.
@@ -2242,9 +2301,16 @@ fn avatar_surface(
     }
 }
 
+/// One of the greeter's own marks, centred in `rect` at `share` of its height.
+///
+/// Every mark ships as a measurement of its shape rather than as a picture of
+/// one, so the quad carries a depth and the full gloss and the shader builds the
+/// material out of the cell — see [`visual::field`]. Asked for a cell that holds
+/// a picture it draws one, because a depth on a picture is what the shader reads
+/// as a distance field and it would come out a pale smear.
 fn glyph(scene: &mut Scene, slot: u32, rect: [f32; 4], share: f32, color: [f32; 4]) {
     let mark = rect[3] * share;
-    scene.quads.push(Quad {
+    scene.quads.push(shaded(Quad {
         rect: [
             rect[0] + rect[2] * 0.5 - mark * 0.5,
             rect[1] + rect[3] * 0.5 - mark * 0.5,
@@ -2254,7 +2320,21 @@ fn glyph(scene: &mut Scene, slot: u32, rect: [f32; 4], share: f32, color: [f32; 
         slot,
         color,
         ..Quad::default()
-    });
+    }));
+}
+
+/// Give a quad the depth and the light a measured shape is shaded with, if that
+/// is what its cell holds.
+///
+/// The whole of the migration to the material, and the reason it is one
+/// function: `visual::measured` is the only place that knows which cells hold a
+/// measurement, and every mark in this program reaches a frame through here.
+fn shaded(mut quad: Quad) -> Quad {
+    if visual::measured(quad.slot) {
+        quad.thickness = quad.rect[2].min(quad.rect[3]) * visual::field::DEPTH;
+        quad.gloss = GLOSS_FULL;
+    }
+    quad
 }
 
 fn bounded_tail(input: &str, limit: usize) -> String {
@@ -2341,18 +2421,13 @@ fn build_keyboard(
                 });
             }
             if let Some(slot) = glyph_slot(key) {
-                let mark = h * 0.46;
-                output.scene.quads.push(Quad {
-                    rect: [
-                        x + w * 0.5 - mark * 0.5,
-                        y + lift + h * 0.5 - mark * 0.5,
-                        mark,
-                        mark,
-                    ],
+                glyph(
+                    &mut output.scene,
                     slot,
-                    color: palette.text.a(if focused { 1.0 } else { 0.82 }),
-                    ..Quad::default()
-                });
+                    rect,
+                    0.46,
+                    palette.text.a(if focused { 1.0 } else { 0.82 }),
+                );
             } else {
                 let label = key.cap(board.shifted());
                 let size = if row == 0 {
@@ -3005,6 +3080,236 @@ mod tests {
         );
     }
 
+    /// The letters of the clock, in the order they were drawn.
+    ///
+    /// By cell rather than by content, because the time is not text any more:
+    /// each of its characters is a quad pointing at the cell that holds the
+    /// measurement of that character's shape.
+    fn clock_letters(scene: &Scene) -> Vec<&Quad> {
+        let cells = visual::LETTER_SLOT..visual::LETTER_SLOT + visual::letters::SET.len() as u32;
+        scene
+            .quads
+            .iter()
+            .filter(|quad| cells.contains(&quad.slot))
+            .collect()
+    }
+
+    /// The hour is drawn in the material the column's marks are drawn in, and in
+    /// the accent's own pale cast — the two things that make it the shell's clock
+    /// rather than a second one that looks like it.
+    ///
+    /// The failure this would catch is the one a cell of this kind always
+    /// invites: a quad pointing at a measurement but drawn as a picture, which
+    /// the shader samples as coverage and puts on screen as a pale smear.
+    #[test]
+    fn the_hour_is_drawn_in_water_in_the_accents_own_cast() {
+        let users = [user("Alex")];
+        let sessions = [session("LineXinBar")];
+        let output = one_display(
+            view(
+                &users,
+                &sessions,
+                Phase::Choose,
+                Focus::Users,
+                FOOTER.as_slice(),
+            ),
+            1600.0,
+            900.0,
+        );
+        let letters = clock_letters(&output.scene);
+        assert!(!letters.is_empty(), "the hour is drawn");
+        let tint = theme::theme().text_soft.a(1.0);
+        for letter in &letters {
+            assert!(
+                letter.glyph_material(),
+                "a letter is drawn as a picture: {letter:?}",
+            );
+            assert_eq!(
+                &letter.color[..3],
+                &tint[..3],
+                "a letter is not in the accent's cast",
+            );
+            // The alpha travels in `fade`, because on a measured shape the
+            // colour is the stain: a letter that faded through its colour would
+            // become clearer rather than fainter.
+            assert_eq!(letter.color[3], 1.0);
+            assert!(letter.fade > 0.0 && letter.fade <= 1.0);
+        }
+        // One square per letter, all of one size, so the bevel is one depth
+        // across the run.
+        let side = letters[0].rect[2];
+        for letter in &letters {
+            assert!(
+                (letter.rect[2] - side).abs() < 1e-3 && (letter.rect[3] - side).abs() < 1e-3,
+                "the letters are not one size: {} against {side}",
+                letter.rect[2],
+            );
+        }
+        // And the date beside it is the same colour, so the two lines read as
+        // one object even though only one of them is water.
+        let date = crate::clock::Now::read().expect("local time").date();
+        let line = output
+            .scene
+            .texts
+            .iter()
+            .find(|text| text.content == date)
+            .expect("the date is drawn");
+        assert_eq!(&line.color[..3], &tint[..3]);
+    }
+
+    /// The hour stands where the text pipeline had it: centred across the half
+    /// of the display the column does not cover, on the same baseline, letter
+    /// after letter by the advances the face gives them.
+    #[test]
+    fn the_hour_is_centred_on_the_wallpaper_and_stands_on_its_baseline() {
+        let users = [user("Alex")];
+        let sessions = [session("LineXinBar")];
+        for (width, height) in [(1600.0, 900.0), (2560.0, 1440.0), (3840.0, 2160.0)] {
+            let output = one_display(
+                view(
+                    &users,
+                    &sessions,
+                    Phase::Choose,
+                    Focus::Users,
+                    FOOTER.as_slice(),
+                ),
+                width,
+                height,
+            );
+            let metrics = Metrics::new(width, height);
+            let layout = Layout::new(
+                metrics,
+                &view(
+                    &users,
+                    &sessions,
+                    Phase::Choose,
+                    Focus::Users,
+                    FOOTER.as_slice(),
+                ),
+            );
+            let size = layout.clock[3] / 1.22;
+            let mut letters = clock_letters(&output.scene);
+            letters.sort_by(|a, b| a.rect[0].total_cmp(&b.rect[0]));
+
+            // Centred: the ink either side of the middle of the box is the same
+            // width, which is what a centred run is however it was laid out.
+            let first = letters.first().expect("the hour is drawn");
+            let last = letters.last().expect("the hour is drawn");
+            let middle = layout.clock[0] + layout.clock[2] * 0.5;
+            let left = middle - (first.rect[0] + first.rect[2] * 0.5);
+            let right = (last.rect[0] + last.rect[2] * 0.5) - middle;
+            assert!(
+                (left - right).abs() < 0.5,
+                "{width}x{height}: the hour is {left} one side of the middle and {right} the other",
+            );
+
+            // On the baseline, every letter of it.
+            let line = layout.clock[1]
+                + (visual::letters::BASELINE - visual::letters::LETTER_MIDDLE) * size;
+            for letter in &letters {
+                assert!(
+                    ((letter.rect[1] + letter.rect[3] * 0.5) - line).abs() < 1e-3,
+                    "{width}x{height}: a letter sits off the line at {}",
+                    letter.rect[1],
+                );
+            }
+
+            // And the colon between the hours and the minutes is narrower than
+            // the digits, so the pen moved by each letter's own advance rather
+            // than by a fixed step.
+            let steps: Vec<f32> = letters
+                .windows(2)
+                .map(|pair| pair[1].rect[0] - pair[0].rect[0])
+                .collect();
+            let digit = steps[0];
+            assert!(
+                steps.iter().any(|step| (step - digit).abs() > 1.0),
+                "{width}x{height}: every letter advanced by the same amount: {steps:?}",
+            );
+        }
+    }
+
+    /// Every cell that holds a measurement is drawn as one, and nothing else is.
+    ///
+    /// Both halves are the same bug seen from either side. The shader decides
+    /// which kind of cell a quad points at from the quad itself — square-cornered
+    /// and with a depth — so a pane that ever came out square would be shaded as
+    /// a bead of water with a photograph in its field, and a mark that lost its
+    /// depth would be sampled as a picture and come out a pale smear. The shell
+    /// shipped that second one twice before it had a test for it.
+    ///
+    /// This is the whole screen, in the state that has the most on it at once.
+    #[test]
+    fn every_measured_cell_is_drawn_as_one_and_nothing_else_is() {
+        let users = [user("Alex"), user("Bo")];
+        let sessions = [session("LineXinBar"), session("Plasma")];
+        let board = Board::default();
+        let phases = [
+            Phase::Choose,
+            Phase::Username {
+                input: "al",
+                error: None,
+            },
+            Phase::Authenticating {
+                prompt: "Password",
+                secret: true,
+                input: "hunter2",
+            },
+            Phase::Error("Try again"),
+        ];
+        let check = |where_: &str, output: Output| {
+            let mut marks = 0;
+            let mut letters = 0;
+            for quad in &output.scene.quads {
+                assert_eq!(
+                    quad.glyph_material(),
+                    visual::measured(quad.slot),
+                    "{where_}: cell {} is drawn the wrong way round",
+                    quad.slot,
+                );
+                if quad.glyph_material() {
+                    if (visual::LETTER_SLOT..visual::FACE_SLOT).contains(&quad.slot) {
+                        letters += 1;
+                    } else {
+                        marks += 1;
+                    }
+                }
+            }
+            // And the check has teeth: this screen really does draw both kinds.
+            // The footer's four, the back arrow, the session badge and whatever
+            // else the screen has on it, and the five letters of the clock.
+            assert!(marks > 6, "{where_}: {marks} marks were drawn");
+            assert_eq!(letters, 5, "{where_}: {letters} letters of the clock");
+        };
+        for phase in phases {
+            let mut view = view(&users, &sessions, phase, Focus::Prompt, FOOTER.as_slice());
+            // With the board up as well, which is the state with the most panes
+            // on the screen at once.
+            view.keyboard = Some(&board);
+            view.keyboard_interactive = true;
+            view.keyboard_arrival = 1.0;
+            let where_ = format!("{:?}", view.phase);
+            check(&where_, one_display(view, 1600.0, 900.0));
+        }
+
+        // And with the session menu open, which is the one screen that draws a
+        // mark this greeter does not draw anywhere else: the tick on the row
+        // already chosen, which is the session badge again.
+        let mut open = view(
+            &users,
+            &sessions,
+            Phase::Choose,
+            Focus::Session,
+            FOOTER.as_slice(),
+        );
+        open.session_menu = Some(Menu {
+            selected: 1,
+            progress: 1.0,
+            interactive: true,
+        });
+        check("the session menu", one_display(open, 1600.0, 900.0));
+    }
+
     /// The clock is the half of the design that has room to be dropped. A
     /// narrow display gives the whole width to the column instead of splitting
     /// it into two halves that are each too small to read.
@@ -3035,8 +3340,19 @@ mod tests {
             900.0,
         );
         let clock = crate::clock::Now::read().expect("local time").time();
-        assert!(wide.scene.texts.iter().any(|text| text.content == clock));
-        assert!(!narrow.scene.texts.iter().any(|text| text.content == clock));
+        assert_eq!(
+            clock_letters(&wide.scene).len(),
+            clock.chars().count(),
+            "the wide display draws every letter of the time",
+        );
+        assert!(
+            clock_letters(&narrow.scene).is_empty(),
+            "the narrow one draws no clock at all",
+        );
+        // And the date, which is words and stays a text run either way.
+        let date = crate::clock::Now::read().expect("local time").date();
+        assert!(wide.scene.texts.iter().any(|text| text.content == date));
+        assert!(!narrow.scene.texts.iter().any(|text| text.content == date));
     }
 
     /// Every action the administrator left on is reachable with a pointer, and

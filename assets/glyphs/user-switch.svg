@@ -1,102 +1,44 @@
 <!--
-  The route for an account the greeter cannot enumerate: an arrow arriving at
-  a person.
+  The route to an account the greeter cannot enumerate: an arrow arriving at a
+  person.
 
-  Not a door. `lxb-desktop` has one — `sign-out.svg` — and it is the wrong
-  picture here by exactly one direction: a door with a bolt leaving through it
-  is *this account going away*, and this button is *another account arriving*.
-  The two are easy to draw alike and impossible to confuse once the arrow
-  points at somebody.
+  Two objects, and the arrow is the one that moves — it points at the figure
+  rather than away from it, because what this button does is bring somebody who
+  is not on the carousel *in*. Turned round it would read as signing out, which
+  is the one thing on this row it is not.
 
-  The figure is the head-and-shoulders every interface in the world uses for an
-  account, moulded rather than outlined: a bead for the head and a shoulder
-  line struck flat across the bottom, both raised off the arrow behind them so
-  the arrow reads as pointing *at* the person rather than through them. The
-  shoulders are a half-stadium rather than a semicircle, because a semicircle
-  under a bead is a mushroom.
+  The arrowhead is a little shorter than the one the old painted drawing used.
+  It had to be: that version stood the figure in front of the arrow and let a
+  drop shadow separate the two, and nothing here casts a shadow onto anything
+  but the flat space beside it. What separates them now is a real gap, and a gap
+  narrower than the wall the material puts round each body closes up into one
+  object.
 
-  Authored in white and greys, because the greeter tints what it draws: an
-  atlas quad's colour is multiplied into the texel, so anything lighter than
-  white is unreachable and anything coloured could only come out muddier than
-  the label beside it. The greys are not a colour — they are the shading.
+  The shoulders are cut off flat at the foot rather than curving back under,
+  which is what a person behind a counter looks like and what every account
+  glyph has drawn since they existed.
+
+  Scaled a hair inside its cell, like the session badge: the arrow's tail
+  reached to within two units of the edge, and the shadow is drawn in those two
+  units.
+
+  lxb:shape — the material is computed from this outline; see
+  src/visual/field.rs, which is where that is explained.
 -->
+
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
   <defs>
-    <!-- The material, and the lamp above it. Identical in every moulded glyph
-         of this set on purpose. -->
-    <linearGradient id="face" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#f8f8f8"/>
-      <stop offset="0.3" stop-color="#eeeeee"/>
-      <stop offset="0.56" stop-color="#d4d4d4"/>
-      <stop offset="0.78" stop-color="#dfdfdf"/>
-      <stop offset="1" stop-color="#fafafa"/>
-    </linearGradient>
-    <linearGradient id="gloss" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#ffffff"/>
-      <stop offset="0.76" stop-color="#ffffff" stop-opacity="0.96"/>
-      <stop offset="1" stop-color="#ffffff" stop-opacity="0.86"/>
-    </linearGradient>
-    <linearGradient id="edge" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0" stop-color="#ffffff" stop-opacity="0.98"/>
-      <stop offset="0.2" stop-color="#ffffff" stop-opacity="0"/>
-      <stop offset="0.86" stop-color="#ffffff" stop-opacity="0"/>
-      <stop offset="1" stop-color="#ffffff" stop-opacity="0.62"/>
-    </linearGradient>
-    <linearGradient id="turn" x1="0" y1="0" x2="1" y2="0">
-      <stop offset="0" stop-color="#000000" stop-opacity="0.11"/>
-      <stop offset="0.2" stop-color="#000000" stop-opacity="0"/>
-      <stop offset="0.8" stop-color="#000000" stop-opacity="0"/>
-      <stop offset="1" stop-color="#000000" stop-opacity="0.15"/>
-    </linearGradient>
-    <filter id="drop" x="-35%" y="-35%" width="180%" height="190%">
-      <feDropShadow dx="0.45" dy="1.05" stdDeviation="0.46"
-                    flood-color="#303030" flood-opacity="0.48"/>
-    </filter>
-    <filter id="lift" x="-45%" y="-45%" width="200%" height="210%">
-      <feDropShadow dx="0.3" dy="0.6" stdDeviation="0.26"
-                    flood-color="#252525" flood-opacity="0.5"/>
-    </filter>
-    <filter id="polish" x="-10%" y="-10%" width="120%" height="120%">
-      <feGaussianBlur stdDeviation="0.15"/>
-    </filter>
-
-    <!-- The arrow: one outline, shaft and head together, so the barbs are
-         part of the moulding rather than a second object stuck on the end. -->
-    <path id="bolt" d="M1.9 14.05h7.5V10.4l6.4 5.6-6.4 5.6v-3.65H1.9z"/>
-    <path id="bolt-gloss" d="M1 9h16v5.6C12 16.2 6 16.2 1 14.6z"/>
-    <clipPath id="bolt-clip"><use href="#bolt"/></clipPath>
-
-    <!-- The figure. The shoulders are cut off flat at the foot rather than
-         curving back under, which is what a person behind a counter looks
-         like and what every account glyph has drawn since they existed. -->
+    <path id="bolt" d="M1.9 14.05h7.5V10.4l5.8 5.6-5.8 5.6v-3.65H1.9z"/>
     <circle id="head" cx="23.1" cy="10.9" r="4.15"/>
     <path id="shoulders" d="M16.35 25.4a6.75 6.75 0 0 1 13.5 0z"/>
-    <path id="figure-gloss" d="M15 4h16v9.2c-5.4 2.1-10.6 2.1-16 0z"/>
-    <clipPath id="figure-clip">
+    <g id="bead">
+      <use href="#bolt"/>
       <use href="#head"/>
-    </clipPath>
+      <use href="#shoulders"/>
+    </g>
   </defs>
 
-  <!-- The arrow first and lower, so the figure stands in front of it. -->
-  <g filter="url(#drop)">
-    <use href="#bolt" fill="url(#face)"/>
-    <g clip-path="url(#bolt-clip)">
-      <use href="#bolt-gloss" fill="url(#gloss)" filter="url(#polish)"/>
-    </g>
-    <use href="#bolt" fill="url(#turn)"/>
-    <use href="#bolt" fill="none" stroke="url(#edge)" stroke-width="0.9"/>
-  </g>
-
-  <g filter="url(#lift)">
-    <use href="#head" fill="url(#face)"/>
-    <g clip-path="url(#figure-clip)">
-      <use href="#figure-gloss" fill="url(#gloss)" filter="url(#polish)"/>
-    </g>
-    <use href="#head" fill="url(#turn)"/>
-    <use href="#head" fill="none" stroke="url(#edge)" stroke-width="0.85"/>
-
-    <use href="#shoulders" fill="url(#face)"/>
-    <use href="#shoulders" fill="url(#turn)"/>
-    <use href="#shoulders" fill="none" stroke="url(#edge)" stroke-width="0.85"/>
+  <g transform="translate(16 16) scale(0.97) translate(-16 -16)">
+    <use href="#bead" fill="#ffffff"/>
   </g>
 </svg>

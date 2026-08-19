@@ -331,6 +331,18 @@ impl Board {
         }
     }
 
+    /// Press Enter without the cursor being on it — the board's half of what
+    /// Start does. See `Application::submit_board`.
+    ///
+    /// It spends the latches exactly as pressing the key itself would: a Shift
+    /// armed for the next keystroke is armed for this one. The cursor is
+    /// deliberately left where it was, because the board is going away and
+    /// where it stood is where it should come back.
+    pub fn submit(&mut self) -> Press {
+        self.spend();
+        Press::Type(Stroke::ENTER)
+    }
+
     fn spend(&mut self) {
         self.shift = self.shift.spent();
         self.ctrl = self.ctrl.spent();

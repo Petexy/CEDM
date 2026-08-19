@@ -1,5 +1,7 @@
 //! LineXinBar-compatible wallpaper and Liquid Glass renderer.
 
+pub mod field;
+pub mod letters;
 pub mod theme;
 
 use crate::displays;
@@ -30,9 +32,14 @@ pub const POWER_SLOT: u32 = 11;
 pub const USER_SWITCH_SLOT: u32 = 12;
 pub const SESSION_SLOT: u32 = 13;
 pub const KEYBOARD_SHOW_SLOT: u32 = 14;
+/// The first cell of the clock's own alphabet: the ten digits by value, then the
+/// colon, one cell each. Not drawings — each holds a *measurement* of a
+/// character's shape, which is what lets the shader shade the time out of the
+/// same water it shades the marks out of. See [`letters`].
+pub const LETTER_SLOT: u32 = 15;
 /// The first cell an account's own picture goes in; one per enumerated account,
 /// in the order they were enumerated.
-pub const FACE_SLOT: u32 = 15;
+pub const FACE_SLOT: u32 = LETTER_SLOT + letters::SET.len() as u32;
 pub const CIRCULAR_CORNER: f32 = 2.0;
 pub const SQUIRCLE_CORNER: f32 = 4.0;
 /// One cell, and the size every drawing and every portrait is kept at.
@@ -44,17 +51,39 @@ pub const SQUIRCLE_CORNER: f32 = 4.0;
 /// the one thing that cannot be redrawn at whatever size it is asked for.
 const CELL: u32 = 256;
 const ATLAS_COLUMNS: u32 = 4;
-/// Fifteen drawings and a cell for each account's picture. Eight rows of four
-/// leaves seventeen faces, which is more local interactive accounts than a
-/// machine with a login screen on a television has; past that an account keeps
-/// its initial, which is what every account without a published picture shows
-/// anyway.
-const ATLAS_ROWS: u32 = 8;
+/// Fifteen drawings, eleven letters of the clock, and a cell for each account's
+/// picture. Eleven rows of four leaves eighteen faces, which is more local
+/// interactive accounts than a machine with a login screen on a television has;
+/// past that an account keeps its initial, which is what every account without a
+/// published picture shows anyway.
+///
+/// Three rows more than the drawings and the faces alone needed. The letters
+/// could have been packed into the faces' band instead, and are deliberately
+/// not: an account's picture arriving would then decide whether the clock had a
+/// cell, and a login screen with seventeen accounts on it would be one with no
+/// time on it.
+const ATLAS_ROWS: u32 = 11;
 pub const MAX_FACES: usize = (ATLAS_COLUMNS * ATLAS_ROWS - FACE_SLOT) as usize;
 
 /// The square a portrait has to arrive at to go in a cell.
 pub const fn face_size() -> u32 {
     CELL
+}
+
+/// Whether the cell `slot` holds a *measurement of a shape* rather than a
+/// picture, and so has to be drawn with a depth for the shader to build the
+/// material out of it.
+///
+/// The one question a slot cannot be trusted to answer in `lxb-desktop`, where a
+/// cell may hold an application's own icon out of the theme and the shell has to
+/// carry the name alongside the slot to know which it has. Here it can: every
+/// cell is either one of the drawings below, one of the clock's letters, a
+/// painted cell
+/// or an account's photograph, and all four are decided in this file. Miss it
+/// and the shader samples a distance field as a picture — a pale smear, which is
+/// how the shell found this twice.
+pub fn measured(slot: u32) -> bool {
+    GLYPHS.iter().any(|(cell, _)| *cell == slot) || (LETTER_SLOT..FACE_SLOT).contains(&slot)
 }
 
 /// The cell `index`'s account has its picture in, if the atlas has one for it.
@@ -95,9 +124,14 @@ const UI_FONT: &str = "Roboto";
 /// in Han therefore falls back to whatever the machine has installed — which
 /// on a machine with a Chinese desktop on it is a full CJK face, and on one
 /// without is a machine with no Han names to draw.
+/// The face the clock's letters are cut from, named because [`letters`] loads it
+/// on its own: the cells and the advances have to come from the same file, and
+/// the database below has the machine's own fonts under these six.
+pub(crate) const UI_FONT_BOLD: &[u8] = include_bytes!("../../assets/fonts/Roboto-Bold.ttf");
+
 const UI_FACES: [&[u8]; 6] = [
     include_bytes!("../../assets/fonts/Roboto-Regular.ttf"),
-    include_bytes!("../../assets/fonts/Roboto-Bold.ttf"),
+    UI_FONT_BOLD,
     include_bytes!("../../assets/fonts/NotoSansDevanagariUI-Regular.ttf"),
     include_bytes!("../../assets/fonts/NotoSansDevanagariUI-Bold.ttf"),
     include_bytes!("../../assets/fonts/NotoSansCJKsc-Regular.ttf"),
@@ -159,6 +193,16 @@ impl Default for Quad {
 }
 
 impl Quad {
+    /// Whether the shader will shade this quad out of a measured shape rather
+    /// than sample it as a picture.
+    ///
+    /// The same test `fs_quad` makes, written here so the two cannot drift: a
+    /// square-cornered quad with a depth is a cell holding a distance field, and
+    /// nothing else in this greeter is both.
+    pub fn glyph_material(self) -> bool {
+        self.radius <= 0.0 && self.thickness > 0.0
+    }
+
     fn reads_backdrop(self) -> bool {
         self.radius > 0.0 && self.border <= 0.0 && self.thickness > 0.0
     }
@@ -1136,17 +1180,20 @@ fn pipeline<'a>(
     })
 }
 
-/// The greeter's own marks, in the atlas cells they are rasterised into.
+/// The greeter's own marks, in the atlas cells they are measured into.
 ///
 /// Built in rather than looked up because a login screen runs before any
 /// session does, on a machine that may have no icon theme past hicolor and no
 /// desktop at all to have installed one.
 ///
-/// Seven of them are `lxb-desktop`'s files unchanged — the four arrow caps, the
-/// two controller hints and the keyboard's own close key — and three more are
-/// its drawings under this repository's names, byte for byte from `<svg` on.
-/// The rest are drawn here in the same material. See the guard below, which is
-/// the shell's, and which is what keeps a new one from arriving flat.
+/// Every one of them is a *shape*: the cell holds how far each pixel of it is
+/// from the nearest edge of the mark, and the shader builds the material out of
+/// that — see [`field`], which is where a drawing is made and measured. Ten are
+/// `lxb-desktop`'s own files, byte for byte from `<svg` on: the four arrow caps,
+/// the two controller hints, the keyboard's close key, and its power, cycle and
+/// display marks under this repository's names. The other three are drawn here
+/// in the same language. See the guard below, which is the shell's, and which is
+/// what keeps a new one from arriving as a picture.
 const GLYPHS: [(u32, &[u8]); 13] = [
     (
         ARROW_LEFT_SLOT,
@@ -1202,8 +1249,8 @@ const GLYPHS: [(u32, &[u8]); 13] = [
     ),
 ];
 
-/// Build the atlas: the two painted cells, the drawings, and one cell for each
-/// account that has a picture.
+/// Build the atlas: the two painted cells, the measured marks and letters, and
+/// one cell for each account that has a picture.
 ///
 /// `faces` is straight `RGBA` at [`CELL`] square, in account order — see
 /// [`crate::faces`], which is where they come from and why the greeter is
@@ -1248,10 +1295,26 @@ fn atlas(
                 .copy_from_slice(&cell[source..source + (CELL * 4) as usize]);
         }
     };
+    // The marks, each as a measurement of its own shape rather than as a
+    // picture of one. A drawing that has not been cut back to a silhouette is
+    // rasterised as it was drawn instead — it would come out of the shader as a
+    // pale smear otherwise — and the guard in the tests below is what stops one
+    // shipping that way.
     for (slot, svg) in GLYPHS {
-        if let Some(icon) = rasterise_svg(svg, CELL) {
-            into_cell(slot, &icon);
+        let cell = if field::is_shape(svg) {
+            field::of_drawing(svg, CELL)
+        } else {
+            tracing::warn!(slot, "a drawing that is not a shape");
+            rasterise_svg(svg, CELL)
+        };
+        if let Some(cell) = cell {
+            into_cell(slot, &cell);
         }
+    }
+    // And the clock's letters, measured the same way out of the bundled face.
+    // See [`letters::fields`].
+    for (slot, cell) in letters::fields() {
+        into_cell(slot, &cell);
     }
     for (index, face) in faces.iter().enumerate().take(MAX_FACES) {
         if let Some(face) = face {
@@ -1613,18 +1676,41 @@ pub(crate) mod tests {
         );
     }
 
-    /// The greeter's own marks have to be in the binary, have to draw
-    /// something, and have to be made of the same material as each other —
-    /// because nothing at runtime will notice if they are not. A glyph that
-    /// fails to rasterise leaves an empty circle, which looks like a layout
-    /// that meant to leave one; a flat one among moulded ones looks like the
-    /// control that has not finished loading.
+    /// Every one of the greeter's own marks ships as a measurement of its own
+    /// shape rather than as a picture of one, which is what lets the shader cut
+    /// its own glass to it — see `glyph_material` in shaders.wgsl and [`field`].
     ///
-    /// `lxb-desktop`'s own guard over the same set of drawings, and it is the
-    /// reason the shared ones can be copied across without being checked by
-    /// eye each time.
+    /// `lxb-desktop`'s guard over the same set of drawings, and it is the reason
+    /// the ten shared ones can be copied across without being checked by eye
+    /// each time. Nothing at runtime would notice any of this: a drawing that
+    /// fails to measure leaves an empty circle, which looks like a layout that
+    /// meant to leave one, and a drawing that still paints its own shading comes
+    /// out of the shader as a pale smear.
+    ///
+    /// Four properties, and a drawing is unusable without all four.
+    ///
+    /// It has to be **a shape and nothing else**: pure white where it paints,
+    /// because what ships is the outline and the material is computed. A rim or
+    /// a gradient left in the file would be measured as if it were geometry.
+    ///
+    /// It has to be **signed** — inside the mark is one side of zero and the air
+    /// round it the other, or there is no surface to stand a wall up on. An
+    /// opening is air exactly as the room outside it is, which is the whole of
+    /// how a hole gets a ring round it for nothing.
+    ///
+    /// It has to leave a **margin**. The shader draws the mark's own shadow on
+    /// the flat space beside it and can only draw it where the quad reaches, so a
+    /// mark running out to its cell edge would have its shadow end in a straight
+    /// cut. Two of the drawing's thirty-two units.
+    ///
+    /// And it has to be **a distance**, which is the property that separates a
+    /// field from a blurred silhouette: it may not change by more than a pixel
+    /// per pixel, anywhere. A chamfer approximation fails that along the
+    /// diagonals and a blur fails it everywhere, and either one produces a wall
+    /// that is visibly not a wall — the sort of thing that gets noticed on screen
+    /// and nowhere else.
     #[test]
-    fn every_glyph_ships_neutral_and_draws_something() {
+    fn every_glyph_ships_as_the_shape_of_itself() {
         assert_eq!(
             GLYPHS.len(),
             13,
@@ -1632,60 +1718,127 @@ pub(crate) mod tests {
              and the button that raises it, the three machine actions, the \
              route to an account that was not listed, and the session badge"
         );
-        let mut drawings = Vec::new();
+        let flat: Vec<u32> = GLYPHS
+            .iter()
+            .filter(|(_, svg)| !field::is_shape(svg))
+            .map(|(slot, _)| *slot)
+            .collect();
+        assert!(
+            flat.is_empty(),
+            "every mark this greeter draws is a shape, and the cells {flat:?} are not",
+        );
+
+        let size = CELL as usize;
         for (slot, svg) in GLYPHS {
-            let rgba = rasterise_svg(svg, CELL).unwrap_or_else(|| {
+            // Pure white where it paints. Measured on the drawing as drawn,
+            // which is the one place the colours are still visible.
+            let painted = rasterise_svg(svg, CELL).unwrap_or_else(|| {
                 panic!("slot {slot} did not rasterise");
             });
-            assert_eq!(rgba.len() as u32, CELL * CELL * 4);
-
-            // Ink, not an empty square. A drawing that misses its viewBox
-            // rasterises perfectly happily to nothing at all.
-            let ink = rgba.chunks_exact(4).filter(|px| px[3] > 128).count();
-            let share = ink as f32 / (CELL * CELL) as f32;
-            assert!(
-                (0.05..0.60).contains(&share),
-                "slot {slot} covers {share:.3} of its cell"
-            );
-
-            for pixel in rgba.chunks_exact(4).filter(|px| px[3] == 255) {
-                let [r, g, b] = [pixel[0], pixel[1], pixel[2]];
-                // Neutral, so the colour the layout asks for is the colour it
-                // gets: the atlas multiplies the quad's colour into the texel,
-                // and a glyph with a hue of its own could only ever come out
-                // muddier than the label beside it.
-                //
-                // Not the same as *white*. The moulded ones are shaded — one
-                // lamp above the drawing, a shadow under it — and a grey under
-                // a white tint is still that grey. What must not vary is the
-                // balance between the channels.
-                assert!(
-                    r.abs_diff(g) <= 1 && g.abs_diff(b) <= 1 && r.abs_diff(b) <= 1,
-                    "slot {slot} has a colour of its own: {:?}",
-                    &pixel[..3]
+            for pixel in painted.chunks_exact(4).filter(|px| px[3] > 0) {
+                assert_eq!(
+                    &pixel[..3],
+                    &[255, 255, 255],
+                    "slot {slot} paints {:?}, which is shading and not a shape",
+                    &pixel[..3],
                 );
-                // And never so dark that it reads as a hole in the glyph.
-                // Shadow on a white shell is a dimmer white; a shadow dark
-                // enough to read as a hole has stopped being shading.
-                assert!(r >= 128, "slot {slot} has a pixel at {r}, which is not ink");
             }
-            drawings.push((slot, rgba));
         }
 
-        // One cell each, and no two the same. Four arrow caps that rasterised
+        // Thirteen exact transforms over a 1024-square grid is the whole cost of
+        // this test, and they are thirteen separate problems. As many at a time
+        // as the machine has cores and no more: each holds three grids of its
+        // own, and all of them at once is a gigabyte.
+        let at_once = std::thread::available_parallelism()
+            .map(std::num::NonZeroUsize::get)
+            .unwrap_or(1);
+        let mut fields: Vec<(u32, Option<Vec<u8>>)> = Vec::new();
+        for chunk in GLYPHS.chunks(at_once) {
+            fields.extend(std::thread::scope(|scope| {
+                let workers: Vec<_> = chunk
+                    .iter()
+                    .map(|(slot, svg)| scope.spawn(|| (*slot, field::of_drawing(svg, CELL))))
+                    .collect();
+                workers
+                    .into_iter()
+                    .map(|worker| worker.join().expect("a measurement"))
+                    .collect::<Vec<_>>()
+            }));
+        }
+
+        for (slot, field) in &fields {
+            let (slot, field) = (*slot, field);
+            let field = field
+                .as_ref()
+                .unwrap_or_else(|| panic!("slot {slot} did not measure"));
+            assert_eq!(field.len(), size * size * 4);
+
+            // Back out of the encoding, into pixels of the cell.
+            let at = |x: usize, y: usize| {
+                let stored = f32::from(field[(y * size + x) * 4 + 3]) / 255.0;
+                (stored - 0.5) * 2.0 * field::SDF_RANGE * size as f32
+            };
+
+            // Signed: some of the cell is mark and some of it is air, and
+            // neither is a sliver. A drawing that came out entirely one way is a
+            // mask that did not apply or a shape that missed its viewBox.
+            let inside = (0..size * size)
+                .filter(|i| at(i % size, i / size) < 0.0)
+                .count();
+            let share = inside as f32 / (size * size) as f32;
+            assert!(
+                (0.05..0.60).contains(&share),
+                "slot {slot} is {share:.3} mark, which is not a mark on a space",
+            );
+
+            // The margin the shadow is drawn in, as a ring round the cell that
+            // has to be air.
+            let edge = size / 16;
+            for i in 0..size {
+                for (x, y) in [
+                    (i, edge),
+                    (i, size - 1 - edge),
+                    (edge, i),
+                    (size - 1 - edge, i),
+                ] {
+                    assert!(
+                        at(x.min(size - 1), y.min(size - 1)) > 0.0,
+                        "slot {slot} reaches its own edge at {x},{y}",
+                    );
+                }
+            }
+
+            // And it is a distance: one pixel of travel can only ever be one
+            // pixel of distance. The stored range saturates far from the edge,
+            // which can only make a step smaller, never larger.
+            for y in 1..size - 1 {
+                for x in 1..size - 1 {
+                    let step = (at(x, y) - at(x + 1, y))
+                        .abs()
+                        .max((at(x, y) - at(x, y + 1)).abs());
+                    assert!(step <= 1.35, "slot {slot} steps {step} at {x},{y}");
+                }
+            }
+        }
+
+        // One cell each, and no two the same. Four arrow caps that measured
         // alike would point the wrong way three times out of four, and the two
         // keyboard marks differ by the direction of one triangle.
-        let mut slots: Vec<u32> = drawings.iter().map(|(slot, _)| *slot).collect();
+        let mut slots: Vec<u32> = fields.iter().map(|(slot, _)| *slot).collect();
         slots.sort_unstable();
         slots.dedup();
         assert_eq!(slots.len(), GLYPHS.len(), "two glyphs share a cell");
         assert!(
-            slots.iter().all(|slot| *slot < ATLAS_COLUMNS * ATLAS_ROWS),
-            "a glyph is outside the atlas"
+            slots.iter().all(|slot| measured(*slot)),
+            "a mark is in a cell nothing will draw with a depth",
         );
-        for (index, (slot, rgba)) in drawings.iter().enumerate() {
-            for (other, pixels) in &drawings[index + 1..] {
-                assert_ne!(rgba, pixels, "slots {slot} and {other} draw the same");
+        assert!(
+            slots.iter().all(|slot| *slot < ATLAS_COLUMNS * ATLAS_ROWS),
+            "a glyph is outside the atlas",
+        );
+        for (index, (slot, field)) in fields.iter().enumerate() {
+            for (other, second) in &fields[index + 1..] {
+                assert_ne!(field, second, "slots {slot} and {other} measure the same");
             }
         }
     }

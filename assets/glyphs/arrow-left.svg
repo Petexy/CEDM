@@ -1,5 +1,5 @@
 <!--
-  The left arrow key's cap. Roboto has no arrow glyphs, and the shell bundles
+  The left arrow key's cap. Roboto has no arrow glyphs, and the greeter bundles
   Roboto precisely so it does not depend on what fonts a console has installed,
   so the four arrows are drawings rather than characters.
 
@@ -7,9 +7,15 @@
   shaft two point six thick, both centred on the middle of the viewBox, so the
   four caps read as one set however they are scaled.
 
-  White, for the reason given in the other glyphs: the atlas multiplies the
-  quad's colour into the texel.
+  These four needed nothing doing to them when the set moved to the material
+  below. They were already a shape and nothing else — no rim, no gradient, no
+  shadow — which is what every drawing here has now been cut back to, so all
+  that changed is that they say so.
+
+  lxb:shape — the material is computed from this outline; see
+  src/visual/field.rs, which is where that is explained.
 -->
+
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
   <path fill="#fff" d="M4 12L11.5 5.5V9.7H20V14.3H11.5V18.5Z"/>
 </svg>

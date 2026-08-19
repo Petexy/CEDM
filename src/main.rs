@@ -446,7 +446,10 @@ enum Answer {
 ///   click meaning "the button works".
 fn answer(action: Action, on_board: bool, before: Doing, after: Doing) -> Answer {
     match action {
-        Action::Accept if on_board => Answer::Key,
+        // Start over the board is one of its keys too — Enter — and it sounds
+        // like one. Off the board it never reaches here: it has already been
+        // folded into Accept. See [`Application::apply_action`].
+        Action::Accept | Action::Submit if on_board => Answer::Key,
         Action::Left
         | Action::Right
         | Action::Up
@@ -459,7 +462,7 @@ fn answer(action: Action, on_board: bool, before: Doing, after: Doing) -> Answer
                 Answer::Moved
             }
         }
-        Action::Accept | Action::Back | Action::ToggleKeyboard => {
+        Action::Accept | Action::Submit | Action::Back | Action::ToggleKeyboard => {
             if before == after {
                 Answer::Silent
             } else {
@@ -1120,6 +1123,15 @@ impl Application {
         let before = self.doing();
         let on_board =
             !self.menu_live() && self.keyboard_opened.is_some() && self.keyboard_closing.is_none();
+        // Start is Accept, and is only ever anything else over the board.
+        // Folded here rather than at each of the places Accept is answered —
+        // the column, the session menu, the power panel — because a button
+        // that had to be listed twice everywhere would be dead wherever
+        // somebody forgot to list it a second time.
+        let action = match action {
+            Action::Submit if !on_board => Action::Accept,
+            other => other,
+        };
         self.act(action);
         match answer(action, on_board, before, self.doing()) {
             Answer::Moved => self.sounds.moved(),
@@ -1145,6 +1157,7 @@ impl Application {
                 Action::Up => self.board.up(),
                 Action::Down => self.board.down(),
                 Action::Accept => self.press_board(),
+                Action::Submit => self.submit_board(),
                 Action::Back => self.cancel(),
                 Action::ToggleKeyboard => self.hide_keyboard(Focus::Prompt),
                 Action::Previous | Action::Next => {}
@@ -1166,7 +1179,10 @@ impl Application {
             Action::Right => self.move_focus(0, 1),
             Action::Up => self.move_focus(-1, 0),
             Action::Down => self.move_focus(1, 0),
-            Action::Accept => self.accept_focus(),
+            // Start arrives here only if the fold above ever stops covering
+            // it, and it is Accept when it does: there is no board over this
+            // column for it to be anything else about.
+            Action::Accept | Action::Submit => self.accept_focus(),
             // The shoulder buttons change the session wherever the focus is,
             // and only while it is still the user's to change.
             Action::Previous if matches!(self.stage, Stage::Choose) => self.cycle_session(-1),
@@ -1185,7 +1201,32 @@ impl Application {
     }
 
     fn press_board(&mut self) {
-        match self.board.press() {
+        let press = self.board.press();
+        self.act_on_key(press);
+    }
+
+    /// Start, pressed over the board: Enter, and the board away with it.
+    ///
+    /// The board's Enter key and the key that folds it away are at opposite
+    /// ends of it, and a field that has been filled in is nearly always
+    /// finished with both. What Enter does is exactly what its own key does —
+    /// send the name, or send the answer — and both of those routes take the
+    /// board with them as they go. The closing here is for the third case:
+    /// a name the greeter refused, where the field stays on screen to be
+    /// corrected. The board goes there too, because the error is written above
+    /// the field rather than on the board, and Accept on the prompt raises it
+    /// again with what was typed still in it.
+    fn submit_board(&mut self) {
+        let press = self.board.submit();
+        self.act_on_key(press);
+        if self.keyboard_opened.is_some() && self.keyboard_closing.is_none() {
+            self.hide_keyboard(Focus::Prompt);
+        }
+    }
+
+    /// What one key of the board does, however it came to be pressed.
+    fn act_on_key(&mut self, press: Press) {
+        match press {
             Press::Type(Stroke::Char(character)) => self.push_input(character),
             Press::Type(Stroke::Named("BackSpace")) => self.pop_input(),
             Press::Type(Stroke::Named("Return")) => self.submit(),
@@ -1349,7 +1390,7 @@ impl Application {
             Action::Down | Action::Next => {
                 self.menu_row = (self.menu_row + 1) % count;
             }
-            Action::Accept => {
+            Action::Accept | Action::Submit => {
                 let row = self.menu_row;
                 self.choose_session(row);
             }
@@ -2928,6 +2969,69 @@ mod tests {
             "a board over a field already being typed into"
         );
         assert_eq!(typed.focus, Focus::Prompt);
+    }
+
+    /// Start finishes the typing: Enter, and the board away with it.
+    ///
+    /// Two keys of the board at opposite ends of it, in the one press a
+    /// console has already taught for exactly that. What it must not be is a
+    /// second `A`, which is what it was: over a board it would have pressed
+    /// whichever letter the cursor was standing on and left the keyboard up.
+    #[test]
+    fn start_sends_the_answer_and_takes_the_board_with_it() {
+        let mut console = preview_application(Vec::new());
+        console.begin_login();
+        assert!(console.keyboard_opened.is_some());
+        let keys = console.sounds.spent().key;
+
+        // A letter, walked to and pressed the ordinary way.
+        console.apply_action(Action::Right);
+        console.apply_action(Action::Accept);
+        assert_eq!(&*console.input, "s");
+
+        // And then Start, from wherever the cursor happens to be standing.
+        console.apply_action(Action::Submit);
+        assert_eq!(
+            console.sounds.spent().key,
+            keys + 2,
+            "Start is a key of the board like any other"
+        );
+        assert!(
+            console.input.is_empty(),
+            "Enter did not send what had been typed"
+        );
+        assert!(
+            console.keyboard_closing.is_some(),
+            "the board did not go with the answer"
+        );
+    }
+
+    /// And everywhere there is no board, it is Accept — so that it is one
+    /// button somebody can press without first working out where they are.
+    #[test]
+    fn start_is_accept_wherever_there_is_no_board() {
+        let mut console = preview_application(vec![user("Alex")]);
+        assert!(matches!(console.stage, Stage::Choose));
+        console.focus = Focus::Continue;
+        console.apply_action(Action::Submit);
+        assert!(
+            matches!(
+                console.stage,
+                Stage::Username { .. } | Stage::Authenticating { .. }
+            ),
+            "Start did not sign in with the profile that was selected"
+        );
+
+        // Including over the session menu, which owns every button while it is
+        // up: Start takes the row it is standing on, as Accept does.
+        let mut menu = preview_application(vec![user("Alex")]);
+        menu.sessions = vec![session("lxb", true), session("plasma", false)];
+        menu.user_sessions = vec![0];
+        menu.open_session_menu();
+        menu.apply_action(Action::Down);
+        menu.apply_action(Action::Submit);
+        assert!(!menu.menu_live(), "the menu did not answer Start");
+        assert_eq!(menu.selected_session, 1);
     }
 
     /// A password is what a key press on the profile screen means. Nothing
