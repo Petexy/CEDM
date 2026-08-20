@@ -30,6 +30,20 @@ pub struct State {
     pub last_user: Option<String>,
     #[serde(default)]
     pub accents: BTreeMap<String, String>,
+    /// Which material each account's shell draws its *wallpaper* in, if the
+    /// broker knows. The last place the login screen looks and the first that may
+    /// be absent: the accent has been in this file since before there were two
+    /// materials, and a broker that has never heard of the second simply says
+    /// nothing here.
+    #[serde(default)]
+    pub themes: BTreeMap<String, String>,
+    /// And which material it draws its *marks* in. Newer still than the map
+    /// above, and absent from every broker written before the shell's Theme
+    /// setting became two — which is why [`State::icon_theme_for`] falls back to
+    /// that map: one key used to say what the whole shell was made of, and a
+    /// broker that only has that one meant it about both halves.
+    #[serde(default)]
+    pub icon_themes: BTreeMap<String, String>,
 }
 
 impl State {
@@ -63,6 +77,17 @@ impl State {
 
     pub fn accent_for(&self, username: &str) -> Option<&str> {
         self.accents.get(username).map(String::as_str)
+    }
+
+    pub fn theme_for(&self, username: &str) -> Option<&str> {
+        self.themes.get(username).map(String::as_str)
+    }
+
+    pub fn icon_theme_for(&self, username: &str) -> Option<&str> {
+        self.icon_themes
+            .get(username)
+            .or_else(|| self.themes.get(username))
+            .map(String::as_str)
     }
 }
 

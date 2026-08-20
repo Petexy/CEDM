@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 pub const ENV: &str = "LXB_BACKGROUND_HANDOFF";
 pub const VERSION: &str = "1";
-pub const VISUAL: &str = "lxb-wallpaper-v1";
+pub const VISUAL: &str = "lxb-wallpaper-v2";
 const MAX_ENCODED_BYTES: usize = 1024;
 const MAX_HANDOFF_AGE_NS: u64 = 30_000_000_000;
 const REQUIRED_FIELDS: u8 = 0b0111_1111;
@@ -122,11 +122,11 @@ impl SceneClock {
     }
 
     /// Capture the scene and timestamp from one raw-clock sample.
-    pub fn capture(&self, accent: &str) -> Option<BackgroundHandoff> {
+    pub fn capture(&self, accent: &str, theme: Option<&str>) -> Option<BackgroundHandoff> {
         let origin_ns = self.monotonic_origin_ns?;
         let sample_ns = monotonic_ns()?;
         let scene_ns = sample_ns.checked_sub(origin_ns)?;
-        BackgroundHandoff::from_sample(boot_id()?, sample_ns, scene_ns, accent)
+        BackgroundHandoff::from_sample(boot_id()?, sample_ns, scene_ns, accent, theme)
     }
 }
 
@@ -247,23 +247,55 @@ pub struct BackgroundHandoff {
     pub sample_ns: u64,
     pub scene_ns: u64,
     pub accent: String,
+    /// Which material the wallpaper is being drawn in, for the process that
+    /// picks the record up.
+    ///
+    /// Optional, and the one field here that is: a reader that can see the
+    /// account's own `shell.toml` has a better answer than this one and should
+    /// use it — the shell reads its own settings, and this is ignored there. It
+    /// exists for the reader that *cannot*. The compositor drawing the bridge
+    /// frame in front of this greeter is running as the greeter's own account,
+    /// where the file belongs to somebody else's home directory, and without
+    /// this field it would draw the water in front of a login screen that is
+    /// about to come up in the plain material.
+    ///
+    /// The **wallpaper's** half of that setting and no other. The shell's Theme
+    /// setting became two — one answer for the picture behind everything and one
+    /// for every mark on top of it — and this record stayed one field, because
+    /// what it is written for draws a wallpaper and never a mark. That is also
+    /// what keeps the wire unchanged across the split: a greeter and a session
+    /// on either side of it still exchange byte-for-byte the same record.
+    pub theme: Option<String>,
 }
 
 impl BackgroundHandoff {
-    fn from_sample(boot_id: String, sample_ns: u64, scene_ns: u64, accent: &str) -> Option<Self> {
+    fn from_sample(
+        boot_id: String,
+        sample_ns: u64,
+        scene_ns: u64,
+        accent: &str,
+        theme: Option<&str>,
+    ) -> Option<Self> {
         Some(Self {
             boot_id,
             sample_ns,
             scene_ns,
             accent: accent::canonical(accent)?.to_string(),
+            theme: theme.and_then(accent::canonical_theme).map(str::to_string),
         })
     }
 
     pub fn encode(&self) -> String {
-        format!(
+        let mut record = format!(
             "v={VERSION};visual={VISUAL};clock=linux-monotonic;boot={};sample-ns={};scene-ns={};accent={}",
             self.boot_id, self.sample_ns, self.scene_ns, self.accent
-        )
+        );
+        // Appended rather than written in the middle, so a record without a
+        // theme is byte for byte the record this program has always written.
+        if let Some(theme) = &self.theme {
+            record.push_str(&format!(";theme={theme}"));
+        }
+        record
     }
 
     pub fn environment(&self) -> String {
@@ -281,6 +313,7 @@ impl BackgroundHandoff {
         let mut sample_ns = None;
         let mut scene_ns = None;
         let mut accent = None;
+        let mut theme = None;
         let mut seen = 0_u8;
         for part in value.split(';') {
             let (key, value) = part.split_once('=')?;
@@ -316,6 +349,13 @@ impl BackgroundHandoff {
                     accent = accent::canonical(value).map(str::to_string);
                     1 << 6
                 }
+                // The one optional field, so it is not in `REQUIRED_FIELDS`. Its
+                // bit is still taken, which is what refuses a record that says
+                // it twice.
+                "theme" => {
+                    theme = accent::canonical_theme(value).map(str::to_string);
+                    1 << 7
+                }
                 _ => return None,
             };
             if seen & field != 0 {
@@ -323,7 +363,7 @@ impl BackgroundHandoff {
             }
             seen |= field;
         }
-        (seen == REQUIRED_FIELDS
+        (seen & REQUIRED_FIELDS == REQUIRED_FIELDS
             && version == Some(VERSION)
             && visual == Some(VISUAL)
             && clock == Some("linux-monotonic"))
@@ -332,6 +372,7 @@ impl BackgroundHandoff {
             sample_ns: sample_ns?,
             scene_ns: scene_ns?,
             accent: accent?,
+            theme,
         })
     }
 
@@ -403,17 +444,63 @@ mod tests {
             sample_ns: 10_000_000_000,
             scene_ns: 42_000_000_000,
             accent: "Blue".to_string(),
+            theme: None,
         };
         let parsed = BackgroundHandoff::parse(&state.encode()).unwrap();
         assert_eq!(parsed, state);
         assert_eq!(
             state.encode(),
-            "v=1;visual=lxb-wallpaper-v1;clock=linux-monotonic;boot=01234567-89ab-cdef-0123-456789abcdef;sample-ns=10000000000;scene-ns=42000000000;accent=Blue"
+            "v=1;visual=lxb-wallpaper-v2;clock=linux-monotonic;boot=01234567-89ab-cdef-0123-456789abcdef;sample-ns=10000000000;scene-ns=42000000000;accent=Blue"
         );
         assert_eq!(
             parsed.scene_time(BOOT, 10_250_000_000),
             Some(Duration::from_millis(42_250))
         );
+    }
+
+    /// The material this greeter is drawing in travels with the phase, and a
+    /// record without one is byte for byte the record this program used to write.
+    ///
+    /// Both halves matter. The field exists for the compositor that draws a
+    /// bridge frame in front of *this* program: it runs as the greeter's own
+    /// account and cannot read the settings of the person about to sign in, so
+    /// without being told it would draw the water in front of a login screen
+    /// coming up plain. And it is optional because the other reader of these
+    /// records — the shell — is the account, has already read its own settings,
+    /// and must not be handed a second opinion about them.
+    #[test]
+    fn the_material_travels_with_the_phase_and_is_optional() {
+        let plain = BackgroundHandoff {
+            boot_id: BOOT.to_string(),
+            sample_ns: 10_000_000_000,
+            scene_ns: 42_000_000_000,
+            accent: "Blue".to_string(),
+            theme: Some("Simple".to_string()),
+        };
+        assert_eq!(
+            plain.encode(),
+            "v=1;visual=lxb-wallpaper-v2;clock=linux-monotonic;boot=01234567-89ab-cdef-0123-456789abcdef;sample-ns=10000000000;scene-ns=42000000000;accent=Blue;theme=Simple"
+        );
+        assert_eq!(
+            BackgroundHandoff::parse(&plain.encode()),
+            Some(plain.clone())
+        );
+
+        // Silent about it, and the record is the one every older greeter wrote.
+        let quiet = BackgroundHandoff {
+            theme: None,
+            ..plain.clone()
+        };
+        assert!(!quiet.encode().contains("theme"));
+        assert_eq!(BackgroundHandoff::parse(&quiet.encode()), Some(quiet));
+
+        // A material this greeter does not have is no material, not a broken
+        // record: the phase is still good and the reader still has its own
+        // settings to fall back on.
+        let odd = plain.encode().replace("theme=Simple", "theme=Glass");
+        assert_eq!(BackgroundHandoff::parse(&odd).and_then(|r| r.theme), None);
+        // Said twice, though, and it is a broken record.
+        assert!(BackgroundHandoff::parse(&format!("{};theme=Default", plain.encode())).is_none());
     }
 
     #[test]
@@ -452,6 +539,7 @@ mod tests {
             sample_ns: 2,
             scene_ns: u64::MAX,
             accent: "Blue".to_string(),
+            theme: None,
         };
         assert_eq!(state.scene_time(BOOT, 3), None);
     }
@@ -463,6 +551,7 @@ mod tests {
             sample_ns: 2,
             scene_ns: 4,
             accent: "Blue".to_string(),
+            theme: None,
         };
         assert_eq!(
             state.scene_time(BOOT, state.sample_ns + MAX_HANDOFF_AGE_NS + 1),
@@ -477,7 +566,7 @@ mod tests {
     fn a_resumed_clock_carries_on_from_the_wallpaper_already_on_screen() {
         let compositor = SceneClock::start();
         let record = compositor
-            .capture("Blue")
+            .capture("Blue", None)
             .expect("a machine with a monotonic clock and a boot id")
             .encode();
 
@@ -508,6 +597,7 @@ mod tests {
             sample_ns: 1,
             scene_ns: 9_000_000_000,
             accent: "Blue".to_string(),
+            theme: None,
         };
         let clock = SceneClock::resume(Some(std::ffi::OsStr::new(&elsewhere.encode())));
         assert!(clock.elapsed() < Duration::from_secs(1));
@@ -625,7 +715,7 @@ mod tests {
     fn scene_clock_capture_has_one_exact_raw_clock_origin() {
         let clock = SceneClock::start();
         let origin_ns = clock.monotonic_origin_ns.expect("monotonic clock");
-        let handoff = clock.capture("Blue").expect("captured handoff");
+        let handoff = clock.capture("Blue", None).expect("captured handoff");
         assert_eq!(
             handoff.sample_ns.checked_sub(handoff.scene_ns),
             Some(origin_ns)

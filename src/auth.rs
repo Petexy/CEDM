@@ -657,6 +657,7 @@ mod tests {
             sample_ns: 2_000_000_000,
             scene_ns: 7_500_000_000,
             accent: "Blue".into(),
+            theme: None,
         }
     }
 

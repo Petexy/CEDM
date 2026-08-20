@@ -119,6 +119,26 @@ pub struct Look {
     /// is what answers that.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub accent: Option<String>,
+    /// How much material each half of that shell draws itself with — `Default`
+    /// or `Simple`, canonical or not, with [`Look::theme`] answering that. One
+    /// answer for the picture behind everything and one for every mark on top of
+    /// it, because they are two settings.
+    ///
+    /// Carried for the same reason the accent is, and it matters more: an
+    /// account whose machine cannot afford the water has said so, and a login
+    /// screen that arrived in front of it drawing three lit sheets of it would be
+    /// the one screen on that machine ignoring the setting.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme_wallpaper: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme_icons: Option<String>,
+    /// What the two above were written under before they were two settings.
+    ///
+    /// Read where a half has nothing of its own, and published again where it is
+    /// all a look was read with, so a copy of an old file stays an old file
+    /// rather than becoming a silent statement about a setting it never made.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
     /// What a display with no section of its own is set to, which is the
     /// shell's own arrangement for these four keys.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -221,6 +241,21 @@ impl Look {
         accent::canonical(self.accent.as_deref()?)
     }
 
+    /// The material it asks one half of the screen to be drawn in, if this
+    /// greeter has one by that name.
+    ///
+    /// The half's own key first, then the one both halves shared before they were
+    /// split: a look copied out of a file written by the older shell says one
+    /// thing about the whole of it, and it meant it about both.
+    pub fn theme(&self, part: crate::visual::theme::Part) -> Option<&'static str> {
+        let named = match part {
+            crate::visual::theme::Part::Wallpaper => self.theme_wallpaper.as_deref(),
+            crate::visual::theme::Part::Icons => self.theme_icons.as_deref(),
+        }
+        .or(self.theme.as_deref())?;
+        accent::canonical_theme(named)
+    }
+
     /// Where the sun is worked out for.
     ///
     /// The account's own settings first, then the machine's time zone, in the
@@ -293,6 +328,15 @@ impl Look {
         self.accent = self
             .accent
             .and_then(|name| accent::canonical(&name).map(str::to_string));
+        for named in [
+            &mut self.theme_wallpaper,
+            &mut self.theme_icons,
+            &mut self.theme,
+        ] {
+            *named = named
+                .take()
+                .and_then(|name| accent::canonical_theme(&name).map(str::to_string));
+        }
         self.hdr_srgb_intensity = self.hdr_srgb_intensity.map(|value| value.min(100));
         // Dropped rather than clamped, and dropped as a pair: half a
         // coordinate is not a place, and a latitude brought to the nearest
@@ -950,6 +994,7 @@ mod tests {
     /// [`modes_and_connector_names_are_the_shapes_a_compositor_uses`].
     const SHELL: &str = r#"
 accent = "Red"
+theme-wallpaper = "Simple"
 hdr = false
 hdr-sdr-brightness = 200
 sound-volume = 1.0
@@ -980,6 +1025,15 @@ Music = "modified-newest-first"
         let home = home_with(SHELL, None);
         let look = Look::read(&home, None);
         assert_eq!(look.accent(), Some("Red"));
+        assert_eq!(
+            look.theme(crate::visual::theme::Part::Wallpaper),
+            Some("Simple")
+        );
+        assert_eq!(
+            look.theme(crate::visual::theme::Part::Icons),
+            None,
+            "a half the file says nothing about is a half this greeter has not been told about"
+        );
         assert_eq!(look.hdr, Some(false));
         assert_eq!(look.display["TEST-OUT-1"].hdr, Some(true));
         assert_eq!(look.display["TEST-OUT-1"].hdr_sdr_brightness, Some(250));

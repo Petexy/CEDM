@@ -2,7 +2,7 @@
 
 A controller-first graphical greeter for LineXinBar and ordinary Linux desktop sessions.
 
-This repository is an early, runnable vertical slice. It already renders LineXinBar's exact analytic wallpaper, palette and Liquid Glass material; presents local and directory-user routes in a compact XMB-style carousel; discovers and directly launches installed Wayland session entries without invoking a shell; conducts PAM conversations through greetd; supports controller, mouse and physical-keyboard navigation; embeds the same ANSI on-screen keyboard geometry; draws a whole login screen on every display rather than one across all of them; remembers successful public account/session choices; speaks nine languages, taken from whichever file this distribution keeps the machine's locale in; and hands the wallpaper clock to LineXinBar after authentication.
+This repository is an early, runnable vertical slice. It already renders LineXinBar's exact analytic wallpaper, palette and Liquid Glass material; presents local and directory-user routes in a compact console-style carousel; discovers and directly launches installed Wayland session entries without invoking a shell; conducts PAM conversations through greetd; supports controller, mouse and physical-keyboard navigation; embeds the same ANSI on-screen keyboard geometry; draws a whole login screen on every display rather than one across all of them; remembers successful public account/session choices; speaks nine languages, taken from whichever file this distribution keeps the machine's locale in; and hands the wallpaper clock to LineXinBar after authentication.
 
 ## The screen
 
@@ -188,7 +188,7 @@ The parser recognizes both Wayland and X11 entries, but the greeter currently of
 CEDM launches LineXinBar with a public, one-shot record:
 
 ```text
-LXB_BACKGROUND_HANDOFF=v=1;visual=lxb-wallpaper-v1;clock=linux-monotonic;boot=<boot-id>;sample-ns=<u64>;scene-ns=<u64>;accent=<name>
+LXB_BACKGROUND_HANDOFF=v=1;visual=lxb-wallpaper-v2;clock=linux-monotonic;boot=<boot-id>;sample-ns=<u64>;scene-ns=<u64>;accent=<name>
 ```
 
 Both projects calculate the continuing scene clock as:
@@ -209,7 +209,35 @@ The third interval — the one in which no process holds the DRM master at all, 
 
 None of this is a dependency. CEDM discovers and launches any valid Wayland session entry the same way, and a desktop that knows nothing about the record is unaffected by it: the variable is only ever added to a session authoritatively identified as LineXinBar, and every other session receives the plain allowlisted environment. The continuity contract is an opt-in a cooperating desktop may implement, not a condition of being launched.
 
-The vendored visual contract is named `lxb-wallpaper-v1`. Any pixel-affecting shader/palette change must update both projects and bump that identifier. The copied files carry an origin manifest in [`vendor/line-xinbar/ORIGIN.md`](vendor/line-xinbar/ORIGIN.md).
+The vendored visual contract is named `lxb-wallpaper-v2`. It covers **both**
+materials the shell can be set to: `Default` is the band of water and marks
+beaded out of their own shape, and `Simple` is the plainer look a slow machine
+asks for — the current as three fine glass-silk ribbons, and a mark as the flat
+shape of itself in white with the accent breathed over it.
+
+The shell's Theme setting is **two** keys, and this greeter reads both, because
+it is both halves at once: it draws that wallpaper, and it draws the shell's own
+marks in its clock, its arrows and its buttons.
+
+```toml
+theme-wallpaper = "Simple"
+theme-icons = "Default"
+```
+
+They are read exactly where `accent` is read: the account's own settings first,
+then the copy it published on the way into its last session, then the broker's
+state. So a machine set to `Simple` is in `Simple` from the moment the login
+screen appears, and nothing changes material in front of the user. A file — or a
+published look, or a broker — from before the setting was split carries a single
+`theme` key, which said one thing about the whole shell; it is still read, and
+both halves take it.
+
+Only the **wallpaper's** half travels in the hand-over record, as its one
+optional field, because the reader it is written for is a compositor drawing a
+bridge frame in front of this greeter: it runs as the greeter's own account and
+cannot read the settings of the person about to sign in, and what it draws is a
+wallpaper and never a mark. That is also what kept the record byte-for-byte
+unchanged across the split. Any pixel-affecting shader/palette change must update both projects and bump that identifier. The copied files carry an origin manifest in [`vendor/line-xinbar/ORIGIN.md`](vendor/line-xinbar/ORIGIN.md).
 
 ## Handing the displays over
 

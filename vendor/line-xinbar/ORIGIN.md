@@ -1,6 +1,6 @@
 # LineXinBar shared-surface origin
 
-The following files were copied from LineXinBar (<https://github.com/Petexy/LineXinBar>) at commit `468af41` and remain under that project's GPL-3.0-only terms:
+The following files were copied from LineXinBar (<https://github.com/Petexy/LineXinBar>) at commit `8bc8fd7` and remain under that project's GPL-3.0-only terms:
 
 | CEDM file | LineXinBar origin |
 | --- | --- |
@@ -14,7 +14,7 @@ The following files were copied from LineXinBar (<https://github.com/Petexy/Line
 
 The two Noto faces beside them — `assets/fonts/NotoSansDevanagariUI-{Regular,Bold}.ttf` and `assets/fonts/NotoSansCJKsc-{Regular,Bold}.ttf` — are **not** LineXinBar's. They are subsets of Google's Noto Sans Devanagari UI and Noto Sans CJK SC, cut down to what this login screen draws, and they are here because CEDM says things in nine languages and the shell's Roboto has no Devanagari and no Han in it. They keep their own licence, `assets/fonts/LICENSE-NotoSans.txt` (SIL Open Font License 1.1); neither family declares a Reserved Font Name, so the subsets keep their original names. See "What it says, and in which language" in the README.
 
-`lxb-wallpaper-v1` is the compatibility ABI for the shader, palette uniforms, coordinate system, linear-light colour handling and monotonic scene clock. Bump it in both repositories whenever those pixels or semantics change.
+`lxb-wallpaper-v2` is the compatibility ABI for the shader, palette uniforms, coordinate system, linear-light colour handling and monotonic scene clock. Bump it in both repositories whenever those pixels or semantics change.
 
 ## The four recordings
 
@@ -39,9 +39,37 @@ That answer is CEDM's own to obtain, and deliberately so: `cedm-session` publish
 
 The two projects also disagree about volume on purpose. LineXinBar's clips are played at whatever its own mixer's System row says, because that row exists and the user set it. CEDM has no such row — there is nobody at a login screen to have set one — so it plays at the gain the *session* was at, which is the nearest true thing to "as loud as this machine is".
 
+## Where `src/visual/theme.rs` deliberately differs
+
+The material state at the end of it — `Part`, `PARTS`, `style`, `set_style`,
+`preview_style`, `restore_style` and `style_flag`, which are what
+`theme-wallpaper` and `theme-icons` reach — is LineXinBar's own code, and it names
+the same two halves and the same two values. What it cannot share is the *type*:
+the shell takes `Style` from `lxb-protocol`, the crate it shares with its own
+compositor, and this program vendors that scene rather than depending on the
+crate. So the enum and its table live in `src/accent.rs`, beside the reader that
+pulls the keys out of `shell.toml`, and this file refers to them — `THEMES` for
+the shell's `wallpaper::STYLES`, and `accent::style` for `wallpaper::style`.
+Anything else in the block is the shell's, verbatim.
+
+`Part` itself is *not* one of those substitutions. It is the shell's enum, copied
+whole, and `src/accent.rs` refers back to it here rather than keeping a second
+one — which half of a setting is being talked about is not a fact about the
+vendored scene.
+
 ## Where `src/shaders.wgsl` deliberately differs
 
 The wallpaper is drawn and evaluated **per display** rather than once across the surface: `vs_background` takes a display rectangle per instance and is drawn once for each of them, `fs_background` asks the wallpaper about the display's own `uv` and aspect, and `behind_at` — the fall-through a pane of glass uses where nothing was drawn behind it — takes the display the pane stands on. The `wallpaper` function itself, the palette uniforms and every constant are untouched.
+
+The `glyph_material` in this copy also reads its field with a three-texel arm
+where the shell reads one and a half, because this atlas's cells are twice the
+shell's — that is the shell's number expressed in this program's units, and it is
+explained where it is written.
+
+Both copies read `globals.style.y` for a mark and `globals.style.x` for the
+wallpaper. That is not a divergence either — the Theme setting is two settings
+now, and the pair travels in one `vec4` because a uniform block is laid out in
+sixteen-byte lots.
 
 That is not a divergence from the ABI, it is what the ABI requires here. LineXinBar has one layer surface per output and each evaluates the wallpaper against its own output's size; CEDM has a single surface that its compositor extends across every output, so it has to do per instance what the shell does per surface. On a machine with one display the two are the same arithmetic and the same pixels. A newer copy of `shaders.wgsl` taken from `lxb-desktop` has to have these three changes reapplied, or the handover grows a seam on every machine with two monitors on it.
 

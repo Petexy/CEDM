@@ -472,6 +472,56 @@ fn answer(action: Action, on_board: bool, before: Doing, after: Doing) -> Answer
     }
 }
 
+/// What an account's shell is made of: one material for the picture behind
+/// everything, and one for every mark drawn on top of it.
+///
+/// Two rather than one because the shell's Theme setting is two — they cost
+/// their own money and are wanted in their own combinations — and this login
+/// screen is both halves at once: it draws that same wallpaper, and it draws the
+/// shell's own marks in its clock, its arrows and its buttons.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Materials {
+    wallpaper: String,
+    icons: String,
+}
+
+impl Default for Materials {
+    fn default() -> Self {
+        Self {
+            wallpaper: cedm::accent::DEFAULT_THEME.to_string(),
+            icons: cedm::accent::DEFAULT_THEME.to_string(),
+        }
+    }
+}
+
+impl Materials {
+    fn of(&self, part: visual::theme::Part) -> &str {
+        match part {
+            visual::theme::Part::Wallpaper => &self.wallpaper,
+            visual::theme::Part::Icons => &self.icons,
+        }
+    }
+
+    /// Draw in these from this frame on, without choosing them.
+    ///
+    /// Whole rather than travelling, because a material has no halfway: the
+    /// colour of the screen flows towards the account being looked at and what
+    /// the screen is made of arrives with it.
+    fn preview(&self) {
+        for part in visual::theme::PARTS {
+            visual::theme::preview_style(part, self.of(part));
+        }
+    }
+
+    /// The startup path, where the account the screen opens on is known before
+    /// there is a frame to answer with.
+    fn set(&self) {
+        for part in visual::theme::PARTS {
+            visual::theme::set_style(part, self.of(part));
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 struct PendingAttempt {
     id: cedm::auth::AttemptId,
@@ -480,6 +530,16 @@ struct PendingAttempt {
     preference_username: Option<String>,
     session_id: String,
     accent: String,
+    /// The material this account's *wallpaper* is drawn in, captured with the
+    /// accent and for the same reason: what the session is handed has to be what
+    /// the login screen was actually showing when the password went through, not
+    /// whatever the selection has moved on to since.
+    ///
+    /// The wallpaper's half alone, because the record this ends up in is read by
+    /// a compositor drawing a bridge frame, and a bridge frame is a wallpaper and
+    /// nothing else. The marks are the shell's own business and it reads its own
+    /// settings for them.
+    wallpaper_material: String,
 }
 
 /// What was typed before there was anywhere to put it, and which attempt it
@@ -508,10 +568,15 @@ struct Application {
     selected_user: usize,
     user_motion: Option<CarouselMotion>,
     user_accents: Vec<String>,
+    /// What each listed account's shell is made of, in the same order.
+    user_themes: Vec<Materials>,
     selected_session: usize,
     user_sessions: Vec<usize>,
     other_session: usize,
     accent: String,
+    /// What the account being looked at is made of — the same spellings
+    /// `shell.toml` uses, and the values `visual::theme` is set from.
+    material: Materials,
     focus: Focus,
     /// The column vertical movement travels along, kept separate from where
     /// the focus currently is. See `move_focus`.
@@ -613,6 +678,10 @@ impl Application {
             .iter()
             .map(|user| user_accent(&state, user))
             .collect::<Vec<_>>();
+        let user_themes = users
+            .iter()
+            .map(|user| user_theme(&state, user))
+            .collect::<Vec<_>>();
         let user_sessions = users
             .iter()
             .map(|user| {
@@ -633,6 +702,8 @@ impl Application {
             .cloned()
             .unwrap_or_else(|| cedm::accent::DEFAULT_ACCENT.to_string());
         visual::theme::set_accent(&accent);
+        let material = user_themes.get(selected_user).cloned().unwrap_or_default();
+        material.set();
         let preview_auth = args.preview_auth;
         let preview_menu = args.preview_menu;
         let controller = Controller::new(!args.no_gamepad);
@@ -664,10 +735,12 @@ impl Application {
             selected_user,
             user_motion: None,
             user_accents,
+            user_themes,
             selected_session,
             user_sessions,
             other_session,
             accent,
+            material,
             focus: Focus::Users,
             desired_column: 0,
             stage: Stage::Choose,
@@ -798,11 +871,14 @@ impl Application {
         if self.other_account_selected() {
             self.selected_session = self.other_session;
             self.accent = cedm::accent::DEFAULT_ACCENT.to_string();
+            self.material = Materials::default();
         } else {
             self.selected_session = self.user_sessions[self.selected_user];
             self.accent = self.user_accents[self.selected_user].clone();
+            self.material = self.user_themes[self.selected_user].clone();
         }
         visual::theme::preview_accent(&self.accent);
+        self.material.preview();
     }
 
     fn cycle_user(&mut self, delta: isize) {
@@ -877,6 +953,7 @@ impl Application {
             preference_username: listed_profile.then(|| username.clone()),
             session_id: session.id.clone(),
             accent: self.accent.clone(),
+            wallpaper_material: self.material.wallpaper.clone(),
         });
         self.transition_to(Stage::Busy(
             cedm::i18n::text().starting_authentication.to_string(),
@@ -1870,12 +1947,18 @@ impl Application {
                 self.pending_attempt
                     .as_ref()
                     .filter(|pending| pending.id == self.attempt)
-                    .map(|pending| (pending.id, pending.accent.clone()))
+                    .map(|pending| {
+                        (
+                            pending.id,
+                            pending.accent.clone(),
+                            pending.wallpaper_material.clone(),
+                        )
+                    })
             }
             _ => None,
         };
-        if let Some((attempt, accent)) = start_request {
-            let handoff = self.wallpaper_clock.capture(&accent);
+        if let Some((attempt, accent, material)) = start_request {
+            let handoff = self.wallpaper_clock.capture(&accent, Some(&material));
             if !self
                 .auth
                 .as_ref()
@@ -2476,8 +2559,11 @@ fn write_compositor_config(path: &Path, greeter_arguments: &[String]) -> anyhow:
     std::fs::write(path, document)
         .with_context(|| format!("could not write {}", path.display()))?;
     let accent = user_accent_for_the_login_screen(account.as_deref(), &look);
+    let theme = user_theme_for_the_login_screen(account.as_deref(), &look);
     Ok(Written {
-        wallpaper: greeter_wallpaper(&accent),
+        // The wallpaper's half alone: what this record is for is a compositor
+        // with no client yet, and what it draws is a wallpaper.
+        wallpaper: greeter_wallpaper(&accent, &theme.wallpaper),
         accent: Some(accent),
         account,
     })
@@ -2595,14 +2681,14 @@ struct Written {
 /// rest continue it, and the greeter picks the clock up from here either way —
 /// see [`cedm::handoff::SceneClock::of_this_boot`] and
 /// [`cedm::handoff::SceneClock::resume`].
-fn greeter_wallpaper(accent: &str) -> Option<String> {
+fn greeter_wallpaper(accent: &str, theme: &str) -> Option<String> {
     let clock = match cedm::state::wallpaper_clock_path() {
         Some(path) => cedm::handoff::SceneClock::of_this_boot(&path),
         // Nowhere to keep an anchor. The login screen still comes up and its
         // wallpaper still moves; it just starts the animation over.
         None => cedm::handoff::SceneClock::start(),
     };
-    let record = clock.capture(accent)?;
+    let record = clock.capture(accent, Some(theme))?;
     Some(record.encode())
 }
 
@@ -2612,6 +2698,34 @@ fn greeter_wallpaper(accent: &str) -> Option<String> {
 /// Kept beside [`write_compositor_config`] because the two answers have to be
 /// the same one: the compositor is told which wallpaper to draw before the
 /// greeter has started, and the greeter then draws its own over the top.
+/// The material the login screen opens in, worked out the same way and for the
+/// same reason as the palette beside it.
+///
+/// This one has a second job. The compositor that runs this greeter draws a
+/// bridge frame before the greeter's window exists, and it runs as the greeter's
+/// own account — it cannot read the settings of the person about to sign in. So
+/// this answer is what goes into the handover record, and it is the only way that
+/// compositor can know not to draw the water in front of a login screen coming
+/// up in the plain material.
+fn user_theme_for_the_login_screen(account: Option<&str>, look: &cedm::look::Look) -> Materials {
+    let state = State::load();
+    account
+        .and_then(|name| {
+            let user = cedm::users::discover()
+                .into_iter()
+                .find(|user| user.name == name)?;
+            Some(user_theme(&state, &user))
+        })
+        .unwrap_or_else(|| Materials {
+            wallpaper: named_or_default(look.theme(visual::theme::Part::Wallpaper)),
+            icons: named_or_default(look.theme(visual::theme::Part::Icons)),
+        })
+}
+
+fn named_or_default(named: Option<&'static str>) -> String {
+    named.unwrap_or(cedm::accent::DEFAULT_THEME).to_string()
+}
+
 fn user_accent_for_the_login_screen(account: Option<&str>, look: &cedm::look::Look) -> String {
     let state = State::load();
     account
@@ -2635,6 +2749,43 @@ fn user_accent_for_the_login_screen(account: Option<&str>, look: &cedm::look::Lo
 /// told at some point. On an ordinary machine the first of those is
 /// unreadable — a home directory is not the greeter's to walk into — and the
 /// login screen stands or falls on the second.
+/// The same three places, in the same order of freshness, for the two materials
+/// the account's shell draws in.
+///
+/// Beside [`user_accent`] rather than folded into it: the accent is a colour this
+/// screen is *tinted* with and the theme decides what it is *made of*, and only
+/// one of them has ever been in the broker's state file. A machine whose broker
+/// predates the setting simply falls through to the default, which is the shell's
+/// own look — the right answer for a machine nobody has said is slow.
+///
+/// Both halves walk the same three places independently, and they have to: a
+/// published look from the older shell answers both at once out of its one
+/// `theme` key, and a broker that only knows the one map does the same, but a
+/// current `shell.toml` can perfectly well name one half and leave the other.
+fn user_theme(state: &State, user: &User) -> Materials {
+    let of = |part| {
+        cedm::accent::read_theme_for_home(&user.home, part)
+            .or_else(|| {
+                cedm::look::published(&user.name, user.uid)
+                    .and_then(|look| look.theme(part))
+                    .map(str::to_string)
+            })
+            .or_else(|| {
+                match part {
+                    visual::theme::Part::Wallpaper => state.theme_for(&user.name),
+                    visual::theme::Part::Icons => state.icon_theme_for(&user.name),
+                }
+                .and_then(cedm::accent::canonical_theme)
+                .map(str::to_string)
+            })
+            .unwrap_or_else(|| cedm::accent::DEFAULT_THEME.to_string())
+    };
+    Materials {
+        wallpaper: of(visual::theme::Part::Wallpaper),
+        icons: of(visual::theme::Part::Icons),
+    }
+}
+
 fn user_accent(state: &State, user: &User) -> String {
     cedm::accent::read_path(&cedm::accent::settings_path(&user.home))
         .or_else(|| {
@@ -2850,7 +3001,11 @@ mod tests {
             std::env::temp_dir().join(format!("cedm-live-accent-{}-{unique}", std::process::id()));
         let settings = cedm::accent::settings_path(&home);
         std::fs::create_dir_all(settings.parent().unwrap()).unwrap();
-        std::fs::write(&settings, "accent = \"Blue\"\n").unwrap();
+        std::fs::write(
+            &settings,
+            "accent = \"Blue\"\ntheme-wallpaper = \"Simple\"\n",
+        )
+        .unwrap();
 
         let user = User {
             avatar: None,
@@ -2865,8 +3020,26 @@ mod tests {
             accents: [("alex".to_string(), "Red".to_string())]
                 .into_iter()
                 .collect(),
+            // A broker from before the Theme setting was split: one map, saying
+            // one thing about the whole shell.
+            themes: [("alex".to_string(), "Default".to_string())]
+                .into_iter()
+                .collect(),
+            icon_themes: Default::default(),
         };
         assert_eq!(user_accent(&state, &user), "Blue");
+        assert_eq!(
+            user_theme(&state, &user),
+            Materials {
+                // Named in the account's own file, which is the freshest of the
+                // three places and outranks the broker.
+                wallpaper: "Simple".to_string(),
+                // Not named there at all, so it falls through to the broker's one
+                // map — which is what a broker that has only ever known one
+                // material says about both halves.
+                icons: "Default".to_string(),
+            }
+        );
 
         std::fs::remove_file(settings).unwrap();
         std::fs::remove_dir(home.join(".config/lxb")).unwrap();

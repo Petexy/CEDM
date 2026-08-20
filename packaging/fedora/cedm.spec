@@ -71,8 +71,8 @@ Suggests:       lxb-desktop
 
 %description
 Console Experience Desktop Manager is a controller-first graphical greeter for
-LineXinBar and ordinary Linux desktop sessions. It renders an XMB-style profile
-carousel over an analytic wallpaper, discovers installed Wayland session
+LineXinBar and ordinary Linux desktop sessions. It renders a console-style
+profile carousel over an analytic wallpaper, discovers installed Wayland session
 entries, and conducts PAM conversations through greetd without ever holding a
 privilege of its own.
 

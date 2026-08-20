@@ -283,6 +283,14 @@ struct Globals {
     glow: [f32; 4],
     covers: [[f32; 4]; MAX_COVERS],
     hero: [f32; 4],
+    /// Which material each half of this screen is drawn in: 0 for the shell's
+    /// own and 1 for the plain one an account whose machine cannot afford it has
+    /// asked for. `x` is the wallpaper — the band of water against the glass-silk
+    /// ribbons — and `y` is every mark, beaded out of its own shape against the
+    /// flat shape itself. Two numbers because they are two settings, and the pair
+    /// costs nothing here: a uniform block is laid out in sixteen-byte lots, so
+    /// the other two are spare.
+    style: [f32; 4],
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -696,6 +704,12 @@ impl Renderer {
                 glow: shown.glow.a(1.0),
                 covers: [[0.0; 4]; MAX_COVERS],
                 hero: [0.0; 4],
+                style: [
+                    theme::style_flag(theme::Part::Wallpaper),
+                    theme::style_flag(theme::Part::Icons),
+                    0.0,
+                    0.0,
+                ],
             }),
         );
         let instances = scene.quads.iter().map(instance).collect::<Vec<_>>();
