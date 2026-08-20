@@ -431,11 +431,7 @@ impl Renderer {
         let sample_layout =
             texture_layout(&device, "sample layout", wgpu::TextureViewDimension::D2);
         let atlas_layout = texture_layout(&device, "atlas layout", wgpu::TextureViewDimension::D2);
-        let scenery_layout = texture_layout(
-            &device,
-            "scenery layout",
-            wgpu::TextureViewDimension::D2Array,
-        );
+        let scenery_layout = scenery_layout(&device);
         let sampler = device.create_sampler(&wgpu::SamplerDescriptor {
             label: Some("linear clamp sampler"),
             address_mode_u: wgpu::AddressMode::ClampToEdge,
@@ -448,7 +444,7 @@ impl Renderer {
         });
 
         let (atlas, atlas_bind_group) = atlas(&device, &queue, &atlas_layout, &sampler, faces);
-        let (scenery, scenery_bind_group) = scenery(&device, &scenery_layout, &sampler);
+        let (scenery, paper, scenery_bind_group) = scenery(&device, &scenery_layout, &sampler);
 
         let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
             label: Some("LineXinBar shaders"),
@@ -630,7 +626,7 @@ impl Renderer {
         );
 
         // Keep textures alive through their bind groups.
-        let _ = (atlas, scenery);
+        let _ = (atlas, scenery, paper);
         Ok(Self {
             _window: window,
             _instance: instance,
@@ -1384,31 +1380,104 @@ fn rasterise_svg(data: &[u8], size: u32) -> Option<Vec<u8>> {
     Some(rgba)
 }
 
+/// The pictures the shell's wallpaper function reads, none of which this
+/// program has: the key art of a game under a cursor, and the picture or film a
+/// user chose as their own wallpaper.
+///
+/// Three bindings rather than the two [`texture_layout`] makes, because the
+/// wallpaper is one function and the vendored copy of it has to compile against
+/// everything the shell's copy reads. See `src/shaders.wgsl`, and
+/// `vendor/line-xinbar/ORIGIN.md`, which is the contract that makes this the
+/// right trade: a login screen carrying two bindings it never samples is worth a
+/// great deal less than the two copies of that function drifting apart.
+fn scenery_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("scenery layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2Array,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 2,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+        ],
+    })
+}
+
+/// One transparent texel for each of them, and the group that binds the pair.
+///
+/// Neither is ever sampled here. The game under a cursor is the shell's — there
+/// are no cursors on a login screen — and the custom wallpaper is a file under
+/// one account's home, which this program does not read: it draws the shell's
+/// own scene for that setting, exactly as the compositor's bridge frame does.
+/// See `accent::style`.
 fn scenery(
     device: &wgpu::Device,
     layout: &wgpu::BindGroupLayout,
     sampler: &wgpu::Sampler,
-) -> (wgpu::Texture, wgpu::BindGroup) {
-    let texture = device.create_texture(&wgpu::TextureDescriptor {
-        label: Some("empty scenery"),
-        size: wgpu::Extent3d {
-            width: 1,
-            height: 1,
-            depth_or_array_layers: 1,
-        },
-        mip_level_count: 1,
-        sample_count: 1,
-        dimension: wgpu::TextureDimension::D2,
-        format: wgpu::TextureFormat::Rgba8UnormSrgb,
-        usage: wgpu::TextureUsages::TEXTURE_BINDING,
-        view_formats: &[],
-    });
+) -> (wgpu::Texture, wgpu::Texture, wgpu::BindGroup) {
+    let empty = |label: &str| {
+        device.create_texture(&wgpu::TextureDescriptor {
+            label: Some(label),
+            size: wgpu::Extent3d {
+                width: 1,
+                height: 1,
+                depth_or_array_layers: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING,
+            view_formats: &[],
+        })
+    };
+    let texture = empty("empty scenery");
+    let paper = empty("no custom wallpaper");
     let view = texture.create_view(&wgpu::TextureViewDescriptor {
         dimension: Some(wgpu::TextureViewDimension::D2Array),
         ..Default::default()
     });
-    let group = texture_bind_group(device, layout, sampler, &view, "empty scenery");
-    (texture, group)
+    let paper_view = paper.create_view(&wgpu::TextureViewDescriptor::default());
+    let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("empty scenery"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+            wgpu::BindGroupEntry {
+                binding: 2,
+                resource: wgpu::BindingResource::TextureView(&paper_view),
+            },
+        ],
+    });
+    (texture, paper, group)
 }
 
 fn texture_bind_group(

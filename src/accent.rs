@@ -15,6 +15,28 @@ const MAX_SETTINGS_BYTES: u64 = 256 * 1024;
 pub const THEMES: [&str; 2] = ["Default", "Simple"];
 pub const DEFAULT_THEME: &str = THEMES[0];
 
+/// The third thing the shell's *wallpaper* can be set to: a picture or a film of
+/// the user's own, standing where the scene would be.
+///
+/// Named here so that this greeter recognises it rather than merely failing to,
+/// because the two look identical from a settings file and mean opposite things.
+/// An unknown value is a shell newer than this program, or a hand-typed
+/// mistake, and falling back is a guess. This one is neither: it is a setting
+/// this program understands perfectly and deliberately does not carry out.
+///
+/// It cannot. The picture is a file under one account's home directory —
+/// `wallpaper-file` in the same settings file — and this login screen stands in
+/// front of every account on the machine, running as its own user, before any of
+/// them has been unlocked. Reading it would mean a greeter that opens files out
+/// of people's home directories, which is not a thing this program is going to
+/// be. So the answer is the shell's own scene, in the accent that account chose,
+/// which is what the session behind it draws for the same setting whenever its
+/// picture cannot be read.
+///
+/// The shell's own name for this is `lxb_protocol::wallpaper::CUSTOM`, and the
+/// two spellings have to match for the same reason `THEMES` and its two do.
+pub const CUSTOM_WALLPAPER: &str = "Custom wallpaper";
+
 /// The key each half of the shell's Theme setting is written under, in the order
 /// its Settings page lists them: the picture behind everything, then every mark
 /// drawn on top of it.
@@ -65,7 +87,8 @@ impl Style {
     }
 }
 
-/// The style of that name, or the default one for anything else.
+/// The style of that name, or the default one for anything else — which
+/// includes a wallpaper of the user's own; see [`CUSTOM_WALLPAPER`].
 pub fn style(name: &str) -> Style {
     match canonical_theme(name) {
         Some("Simple") => Style::Simple,
@@ -76,7 +99,16 @@ pub fn style(name: &str) -> Style {
 /// The canonical spelling of a theme this greeter knows, matched the way
 /// [`canonical`] matches an accent: without regard to case, because the shell
 /// reads a hand-typed `simple` as the setting too.
+///
+/// A wallpaper of the user's own answers with the default material rather than
+/// with `None`, which is the difference between a value this program understands
+/// and cannot carry out and a value it does not recognise at all. Both end up
+/// drawing the same picture; only one of them is a decision. See
+/// [`CUSTOM_WALLPAPER`].
 pub fn canonical_theme(value: &str) -> Option<&'static str> {
+    if value.eq_ignore_ascii_case(CUSTOM_WALLPAPER) {
+        return Some(DEFAULT_THEME);
+    }
     THEMES
         .into_iter()
         .find(|candidate| candidate.eq_ignore_ascii_case(value))
@@ -222,6 +254,48 @@ mod tests {
             read_theme_path(&path, wallpaper),
             None,
             "a material this greeter has not got is no answer at all"
+        );
+
+        fs::remove_file(path).unwrap();
+        fs::remove_dir(root).unwrap();
+    }
+
+    /// An account whose shell stands one of their own pictures behind everything
+    /// is a login screen drawn in the shell's own scene, in their accent.
+    ///
+    /// Not a fallback, and this is what the test is for: the value is understood
+    /// and deliberately not carried out, because the picture is a file under
+    /// that account's home directory and this program runs before any account
+    /// has been unlocked. What must never happen is the greeter refusing the
+    /// whole file over it and coming up in somebody else's colour.
+    #[test]
+    fn a_shell_showing_the_users_own_picture_is_greeted_by_the_default_scene() {
+        let root = std::env::temp_dir().join(format!("cedm-custom-{}", std::process::id()));
+        let path = root.join("shell.toml");
+        fs::create_dir_all(&root).unwrap();
+        let wallpaper = crate::visual::theme::Part::Wallpaper;
+
+        fs::write(
+            &path,
+            format!(
+                "accent = \"Green\"\ntheme-wallpaper = \"{CUSTOM_WALLPAPER}\"\n\
+                 theme-icons = \"Simple\"\nwallpaper-file = \"/home/somebody/x.jpg\"\n"
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_theme_path(&path, wallpaper).as_deref(),
+            Some(DEFAULT_THEME),
+            "the picture cannot be read here, so the scene is what stands in for it"
+        );
+        assert_eq!(style(CUSTOM_WALLPAPER), Style::Default);
+        // The rest of the file is read exactly as it always was: the accent, and
+        // the other half of the theme, which has nothing to do with wallpapers.
+        assert_eq!(read_path(&path).as_deref(), Some("Green"));
+        assert_eq!(
+            read_theme_path(&path, crate::visual::theme::Part::Icons).as_deref(),
+            Some("Simple")
         );
 
         fs::remove_file(path).unwrap();

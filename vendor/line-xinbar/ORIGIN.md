@@ -1,6 +1,6 @@
 # LineXinBar shared-surface origin
 
-The following files were copied from LineXinBar (<https://github.com/Petexy/LineXinBar>) at commit `8bc8fd7` and remain under that project's GPL-3.0-only terms:
+The following files were copied from LineXinBar (<https://github.com/Petexy/LineXinBar>) at commit `ce7a9a9` and remain under that project's GPL-3.0-only terms:
 
 | CEDM file | LineXinBar origin |
 | --- | --- |
@@ -57,6 +57,15 @@ whole, and `src/accent.rs` refers back to it here rather than keeping a second
 one — which half of a setting is being talked about is not a fact about the
 vendored scene.
 
+There is a fourth substitution now, and it is the only one that is a difference
+in *behaviour* rather than in spelling: `Part::styles` answers with the same two
+materials for the wallpaper as for the marks, where the shell's answers with a
+third under the wallpaper — a picture or a film of the user's own. This program
+does not draw one and could not: the file is under one account's home directory
+and this login screen stands in front of every account on the machine, before any
+of them is unlocked. `accent::CUSTOM_WALLPAPER` is where that setting is
+recognised, and the shell's own scene is what it is answered with.
+
 ## Where `src/shaders.wgsl` deliberately differs
 
 The wallpaper is drawn and evaluated **per display** rather than once across the surface: `vs_background` takes a display rectangle per instance and is drawn once for each of them, `fs_background` asks the wallpaper about the display's own `uv` and aspect, and `behind_at` — the fall-through a pane of glass uses where nothing was drawn behind it — takes the display the pane stands on. The `wallpaper` function itself, the palette uniforms and every constant are untouched.
@@ -70,6 +79,22 @@ Both copies read `globals.style.y` for a mark and `globals.style.x` for the
 wallpaper. That is not a divergence either — the Theme setting is two settings
 now, and the pair travels in one `vec4` because a uniform block is laid out in
 sixteen-byte lots.
+
+`globals.style.x` has a third value, `2`, and it is not a material: the shell's
+Wallpaper setting can be a picture or a film of the user's own, which `wallpaper`
+returns early for and reads out of `paper_texture` at `@group(3) @binding(2)`.
+**This program never writes that value.** The picture is a file under one
+account's home directory and this greeter stands in front of every account on the
+machine, before any of them is unlocked; `accent::CUSTOM_WALLPAPER` is where that
+setting is recognised and answered with the shell's own scene, which is also what
+the session's own compositor does for its bridge frame. The binding is a single
+transparent texel here, beside the empty scenery that is there for the same
+reason: `wallpaper` stays the shell's function verbatim, which is the whole
+contract, and the branch it feeds is never taken.
+
+`lxb-wallpaper-v2` is untouched by that. Nothing about the pixels either program
+draws for `Default` or `Simple` changed, and a machine set to the third value
+hands over exactly the frame it would have handed over before it existed.
 
 That is not a divergence from the ABI, it is what the ABI requires here. LineXinBar has one layer surface per output and each evaluates the wallpaper against its own output's size; CEDM has a single surface that its compositor extends across every output, so it has to do per instance what the shell does per surface. On a machine with one display the two are the same arithmetic and the same pixels. A newer copy of `shaders.wgsl` taken from `lxb-desktop` has to have these three changes reapplied, or the handover grows a seam on every machine with two monitors on it.
 

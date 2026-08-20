@@ -501,8 +501,12 @@ pub fn commit_accent(name: &str) -> bool {
 /// everything below takes one of these rather than existing twice.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Part {
-    /// The picture behind everything: the band of water, or the glass-silk
-    /// ribbons this shell drew before it.
+    /// The picture behind everything: the band of water, the glass-silk ribbons
+    /// this shell drew before it, or a picture or film of the user's own put
+    /// there instead of either.
+    ///
+    /// The one half with a third answer, and it is a third answer of a different
+    /// kind — see [`Part::styles`].
     Wallpaper,
     /// Every mark the shell draws itself: a bead of water shaded out of its own
     /// distance field, or the flat shape of one.
@@ -531,6 +535,25 @@ impl Part {
         match self {
             Self::Wallpaper => "theme-wallpaper",
             Self::Icons => "theme-icons",
+        }
+    }
+
+    /// The values this half may be set to, in the order Settings lists them.
+    ///
+    /// The shell offers a third under Wallpaper — a picture or a film of the
+    /// user's own — and **this program deliberately does not**: the file is
+    /// under one account's home directory and this login screen stands in front
+    /// of all of them, so what it draws for that setting is the shell's own
+    /// scene. See [`crate::accent::CUSTOM_WALLPAPER`], which is where the name
+    /// is recognised and answered.
+    ///
+    /// That is the fourth of this block's substitutions, and the only one that
+    /// is a difference in *behaviour* rather than in spelling. The shape is the
+    /// shell's, so that the same rows and the same validation cannot come to
+    /// different conclusions about what a half may be set to.
+    pub fn styles(self) -> &'static [&'static str] {
+        match self {
+            Self::Wallpaper | Self::Icons => &crate::accent::THEMES,
         }
     }
 }
@@ -597,10 +620,11 @@ pub fn style_flag(part: Part) -> f32 {
 /// Set a material outright, applied and shown together. The startup path,
 /// where the saved setting is read before there is a frame to answer with.
 ///
-/// Names are matched exactly, as [`crate::accent::style`] matches them: the two
-/// spellings are the whole of the setting's domain.
+/// Names are matched exactly, as [`crate::accent::style`] matches them, and
+/// against the values *this half* offers: the spellings [`Part::styles`] lists
+/// are the whole of the setting's domain here.
 pub fn set_style(part: Part, name: &str) -> bool {
-    let known = crate::accent::THEMES.contains(&name);
+    let known = part.styles().contains(&name);
     let style = crate::accent::style(name);
     let mut material = lock_material();
     let chosen = material.part(part);
@@ -611,7 +635,7 @@ pub fn set_style(part: Part, name: &str) -> bool {
 
 /// Draw in a material without choosing it, for a highlighted row.
 pub fn preview_style(part: Part, name: &str) -> bool {
-    if !crate::accent::THEMES.contains(&name) {
+    if !part.styles().contains(&name) {
         return false;
     }
     lock_material().part(part).shown = crate::accent::style(name);
@@ -620,7 +644,7 @@ pub fn preview_style(part: Part, name: &str) -> bool {
 
 /// Choose the material the shell is showing for that half.
 pub fn commit_style(part: Part, name: &str) -> bool {
-    if !crate::accent::THEMES.contains(&name) {
+    if !part.styles().contains(&name) {
         return false;
     }
     let style = crate::accent::style(name);
@@ -710,6 +734,32 @@ pub fn with_accent<T>(name: &str, body: impl FnOnce() -> T) -> T {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A wallpaper of the user's own is a setting this greeter understands and
+    /// deliberately cannot carry out, and the shape of that refusal is what this
+    /// holds: the name is not one of the values either half may be set to, so
+    /// nothing here can be put into it by accident, and what the shader is told
+    /// stays the number for the shell's own scene.
+    ///
+    /// The value never reaches this in practice — `accent::canonical_theme`
+    /// answers `Default` for it long before — and that is exactly why it is
+    /// worth a test. Two doors, and both of them have to be shut.
+    #[test]
+    fn the_greeter_cannot_be_put_into_a_wallpaper_it_has_not_got() {
+        for part in PARTS {
+            assert!(!part.styles().contains(&crate::accent::CUSTOM_WALLPAPER));
+            assert!(!set_style(part, crate::accent::CUSTOM_WALLPAPER));
+            assert!(!preview_style(part, crate::accent::CUSTOM_WALLPAPER));
+            assert!(!commit_style(part, crate::accent::CUSTOM_WALLPAPER));
+            assert_eq!(style(part), Style::Default);
+            assert_eq!(style_flag(part), 0.0, "the scene, and never a picture");
+        }
+        assert_eq!(
+            crate::accent::canonical_theme(crate::accent::CUSTOM_WALLPAPER),
+            Some(crate::accent::DEFAULT_THEME),
+            "and the reader in front of all this says so first"
+        );
+    }
 
     /// The conversion is the whole point of authoring in hex: a mid grey must
     /// arrive at the GPU as mid *light*, which is a much lower number.
