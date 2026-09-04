@@ -301,7 +301,7 @@ The trade that used to argue for a kiosk compositor is real and is now the small
 
 ## Accent and successful-session preferences
 
-For each visible local account, CEDM reads the same top-level `accent` value from `.config/lxb/shell.toml` when it can, then the copy that account published, bounded to 256 KiB and restricted to LineXinBar's canonical five palette names. It smoothly previews that user's whole palette when selection moves.
+For each visible local account, CEDM reads the same top-level `accent` value from `.config/lxb/shell.toml` when it can, then the copy that account published, bounded to 256 KiB and restricted to LineXinBar's canonical twelve palette names. It smoothly previews that user's whole palette when selection moves.
 
 The future privileged seat broker may supply cached accent data in `/var/lib/console-experience-desktop-manager/state.toml`:
 

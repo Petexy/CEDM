@@ -362,7 +362,18 @@ pub struct Renderer {
 impl Renderer {
     pub async fn new(window: Arc<Window>, faces: &[Option<Vec<u8>>]) -> anyhow::Result<Self> {
         let size = window.inner_size();
-        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle();
+        // The window goes to the instance, not only to the surface. wgpu's GL
+        // backend builds its EGL display when the instance is made: with no
+        // display handle there it falls through to
+        // `EGL_MESA_platform_surfaceless`, whose configs are pbuffer-only, and
+        // the surface made from this window is then marked not presentable —
+        // so `request_adapter` refuses GL with "not compatible with provided
+        // surface" and the greeter exits with no adapter at all. GL is the
+        // whole of what a machine with no Vulkan driver has left, a virtual
+        // machine on llvmpipe most of all, so it has to be a real fallback
+        // rather than a named one.
+        let mut descriptor =
+            wgpu::InstanceDescriptor::new_with_display_handle(Box::new(window.clone()));
         descriptor.backends = wgpu::Backends::VULKAN | wgpu::Backends::GL;
         let instance = wgpu::Instance::new(descriptor);
         let surface = instance.create_surface(window.clone())?;

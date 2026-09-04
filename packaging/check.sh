@@ -310,4 +310,89 @@ grep -Fq "systemctl --quiet disable cedm.service" "$PACKAGING_DIR/debian/prerm" 
 grep -Fq "systemctl --quiet disable cedm.service" "$arch_install" \
     || package_die "arch/cedm.install no longer disables cedm.service on removal"
 
+install -Dm0644 "$PROJECT_ROOT/packaging/files/polkit-power.rules.example" \
+    "$stage/usr/share/doc/$PACKAGE_NAME/polkit-power.rules.example"
+install -Dm0644 "$PROJECT_ROOT/contrib/seamless/README.md" \
+    "$stage/usr/share/doc/$PACKAGE_NAME/seamless-login.md"
+
+# And the Fedora file lists have to describe that payload, which nothing above
+# asks. Everything before this compares the checkout and the components against
+# each other; the spec that ships them is checked only by the greps written out
+# by hand in this file. That is how LineXinBar's own spec came to package a
+# drawing that had left the tree, and to leave forty-five installed files in no
+# package at all — neither visible until rpmbuild reached the end of a build it
+# had already paid for in full.
+#
+# Both directions, because RPM fails on both: an entry with nothing behind it
+# is "File not found", and a staged file no entry covers is "Installed (but
+# unpackaged) file(s) found".
+package_note "checking the Fedora file lists against the staged payload"
+spec_root="$stage"
+spec_lists="$(mktemp -d)"
+spec_entries() {
+    awk '
+        /^%files/ { inside = 1; next }
+        /^%(changelog|prep|build|check|install|package|description|pre|post|preun|postun)/ { inside = 0 }
+        !inside { next }
+        /^[[:space:]]*(#|$)/ { next }
+        # %license and %doc are filled by RPM from the source tree, not from
+        # the buildroot, so they are not part of what install.sh stages.
+        /^%(license|doc)[[:space:]]/ { next }
+        {
+            entry = $0
+            kind = "path"
+            if (entry ~ /^%dir[[:space:]]/) { kind = "dir"; sub(/^%dir[[:space:]]+/, "", entry) }
+            sub(/^%config\([^)]*\)[[:space:]]+/, "", entry)
+            sub(/^%config[[:space:]]+/, "", entry)
+            print kind "\t" entry
+        }
+    ' "$PACKAGING_DIR/fedora/cedm.spec"
+}
+
+: > "$spec_lists/packaged"
+while IFS=$'\t' read -r kind entry; do
+    entry="$(printf '%s\n' "$entry" | sed \
+        -e 's|%{_bindir}|/usr/bin|g' \
+        -e 's|%{_datadir}|/usr/share|g' \
+        -e 's|%{_docdir}|/usr/share/doc|g' \
+        -e 's|%{_unitdir}|/usr/lib/systemd/system|g' \
+        -e 's|%{_sysusersdir}|/usr/lib/sysusers.d|g' \
+        -e 's|%{_tmpfilesdir}|/usr/lib/tmpfiles.d|g' \
+        -e 's|%{_udevrulesdir}|/usr/lib/udev/rules.d|g' \
+        -e 's|%{_sysconfdir}|/etc|g' \
+        -e "s|%{name}|$PACKAGE_NAME|g" \
+        -e 's|%{_prefix}|/usr|g')"
+    # Refused rather than skipped: an entry this cannot read is an entry that
+    # would go unchecked, which is the state the whole check exists to end.
+    if [[ "$entry" == *'%{'* ]]; then
+        package_die "check.sh cannot expand the %files entry $entry.
+Teach the expansions above the macro rather than leaving the entry unchecked."
+    fi
+    entry="${entry%/}"
+    if [[ "$kind" == dir ]]; then
+        # %dir packages the directory itself and none of its contents, so it
+        # covers nothing: a file under it still needs an entry of its own.
+        [[ -d "$spec_root$entry" ]] \
+            || package_die "the spec packages the directory $entry, which nothing creates"
+        continue
+    fi
+    if [[ -d "$spec_root$entry" ]]; then
+        (cd "$spec_root" && find ".$entry" \( -type f -o -type l \) -printf '%p\n') \
+            | sed 's|^\./||' >> "$spec_lists/packaged"
+    elif [[ -f "$spec_root$entry" || -L "$spec_root$entry" ]]; then
+        printf '%s\n' "${entry#/}" >> "$spec_lists/packaged"
+    else
+        package_die "the spec packages $entry, which nothing installs"
+    fi
+done < <(spec_entries)
+
+sort -u "$spec_lists/packaged" -o "$spec_lists/packaged"
+(cd "$spec_root" && find . -mindepth 1 \( -type f -o -type l \) -printf '%P\n' | sort) \
+    > "$spec_lists/staged"
+if comm -23 "$spec_lists/staged" "$spec_lists/packaged" | grep -q .; then
+    package_die "installed and packaged by no %files section: $(
+        comm -23 "$spec_lists/staged" "$spec_lists/packaged" | tr '\n' ' ')"
+fi
+rm -rf -- "$spec_lists"
+
 package_note "package definitions and staged payload are valid (version $PACKAGE_VERSION)"

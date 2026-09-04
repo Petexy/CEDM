@@ -510,7 +510,7 @@ mod tests {
         );
         assert!(BackgroundHandoff::parse(&valid).is_some());
         assert!(BackgroundHandoff::parse(&valid.replace(VISUAL, "other")).is_none());
-        assert!(BackgroundHandoff::parse(&valid.replace("Green", "Orange")).is_none());
+        assert!(BackgroundHandoff::parse(&valid.replace("Green", "Chartreuse")).is_none());
         assert!(BackgroundHandoff::parse(&valid)
             .unwrap()
             .scene_time("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", 5)

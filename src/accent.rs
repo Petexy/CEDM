@@ -5,8 +5,13 @@ use std::fs::File;
 use std::io::Read;
 use std::path::{Path, PathBuf};
 
-pub const DEFAULT_ACCENT: &str = "Purple";
-pub const ACCENTS: [&str; 5] = ["Purple", "Blue", "Green", "Yellow", "Red"];
+/// Every accent name this greeter will accept out of a user's settings file.
+///
+/// Read off the palettes themselves rather than written out again here. There
+/// is one list of accents in this program — `visual::theme::ACCENTS`, which is
+/// also what draws them — and a second spelling of it would be a list that can
+/// fall behind the colours it names without anything saying so.
+pub const DEFAULT_ACCENT: &str = crate::visual::theme::ACCENTS[0].name;
 const MAX_SETTINGS_BYTES: u64 = 256 * 1024;
 
 /// Every material the shell can be set to draw itself in, in the order its
@@ -123,6 +128,10 @@ struct ShellSettings {
     /// What the two above were written under before they were two settings. See
     /// [`LEGACY_THEME_KEY`].
     theme: Option<String>,
+    /// Which arrangement the account's keyboards are set to, as the one key
+    /// both halves of that answer are written in. See
+    /// [`crate::keyboard::layout_key`].
+    keyboard_layout: Option<String>,
 }
 
 impl ShellSettings {
@@ -175,6 +184,21 @@ pub fn read_path(path: &Path) -> Option<String> {
     canonical(&read_settings(path)?.accent?).map(str::to_string)
 }
 
+/// The keyboard arrangement an account's shell is set to, out of the same file
+/// the accent and the materials come from.
+///
+/// The one setting on this login screen that is about what somebody can *type*
+/// rather than what they are looking at, which is why it is read at all: a
+/// password with a Polish or a French letter in it cannot be typed on a board
+/// offering American ones. See [`crate::keyboard`].
+pub fn read_keyboard_for_home(home: &Path) -> Option<(String, String)> {
+    read_keyboard_path(&settings_path(home))
+}
+
+pub fn read_keyboard_path(path: &Path) -> Option<(String, String)> {
+    crate::keyboard::layout_key(&read_settings(path)?.keyboard_layout?)
+}
+
 fn read_settings(path: &Path) -> Option<ShellSettings> {
     // A corrupt or hostile user-owned settings file must not make the greeter
     // allocate without bound. Reading from the opened descriptor also avoids
@@ -191,8 +215,9 @@ fn read_settings(path: &Path) -> Option<ShellSettings> {
 }
 
 pub fn canonical(value: &str) -> Option<&'static str> {
-    ACCENTS
-        .into_iter()
+    crate::visual::theme::ACCENTS
+        .iter()
+        .map(|accent| accent.name)
         .find(|candidate| candidate.eq_ignore_ascii_case(value))
 }
 

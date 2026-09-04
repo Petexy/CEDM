@@ -289,6 +289,25 @@ fn main() -> anyhow::Result<()> {
         from = language.origin,
         "the login screen speaks the language this machine is set to"
     );
+    // And the keyboard the on-screen board is a picture of, on the same terms:
+    // once, before anything is drawn, and said out loud. A password with an
+    // accented letter in it cannot be typed on a board that offers only
+    // American ones, and "the keyboard came up QWERTY" has the same handful of
+    // causes and no symptom that tells them apart.
+    //
+    // This is the machine's own answer and the floor under every account: the
+    // board follows whichever account is being looked at, out of that account's
+    // own settings, and falls back to here. See `Application::set_keyboard`.
+    {
+        let (layout, variant) = cedm::keyboard::system_layout();
+        let read = cedm::keyboard::note_layout(&layout, &variant);
+        tracing::info!(
+            layout,
+            variant = variant.as_str(),
+            read,
+            "the on-screen keyboard is a picture of this machine's keyboard"
+        );
+    }
     if args.displays.len() > cedm::displays::MAX {
         bail!(
             "at most {} displays are composed separately",
@@ -570,6 +589,16 @@ struct Application {
     user_accents: Vec<String>,
     /// What each listed account's shell is made of, in the same order.
     user_themes: Vec<Materials>,
+    /// The keyboard each listed account types on, in the same order again, as
+    /// an xkb layout and variant. See `user_keyboard`.
+    user_keyboards: Vec<(String, String)>,
+    /// What this machine's keyboards are set to, under every account: the floor
+    /// beneath the list above, and where a layout that will not compile lands.
+    machine_keyboard: (String, String),
+    /// What the on-screen board is currently a picture of. Held so that turning
+    /// the carousel past five accounts on the same keyboard does not compile
+    /// the same keymap five times.
+    keyboard: (String, String),
     selected_session: usize,
     user_sessions: Vec<usize>,
     other_session: usize,
@@ -682,6 +711,11 @@ impl Application {
             .iter()
             .map(|user| user_theme(&state, user))
             .collect::<Vec<_>>();
+        let machine_keyboard = cedm::keyboard::system_layout();
+        let user_keyboards = users
+            .iter()
+            .map(|user| user_keyboard(user, &machine_keyboard))
+            .collect::<Vec<_>>();
         let user_sessions = users
             .iter()
             .map(|user| {
@@ -736,6 +770,9 @@ impl Application {
             user_motion: None,
             user_accents,
             user_themes,
+            keyboard: machine_keyboard.clone(),
+            user_keyboards,
+            machine_keyboard,
             selected_session,
             user_sessions,
             other_session,
@@ -778,6 +815,16 @@ impl Application {
             _night_light: night_light,
             fatal: None,
         };
+        // The board follows whichever account is being looked at, and at
+        // startup that is whichever one was remembered. Done here rather than
+        // above because it is the same step the carousel takes, and there is
+        // one place it should live.
+        let remembered = application
+            .user_keyboards
+            .get(selected_user)
+            .cloned()
+            .unwrap_or_else(|| application.machine_keyboard.clone());
+        application.set_keyboard(remembered);
         if preview_auth {
             application.stage = Stage::Authenticating {
                 prompt: cedm::i18n::text().password.to_string(),
@@ -856,6 +903,38 @@ impl Application {
         self.selected_user >= self.users.len()
     }
 
+    /// Make the on-screen board a picture of this keyboard, where it is not
+    /// already one.
+    ///
+    /// Compiling a keymap is a file opened and a grammar parsed, and every
+    /// account on an ordinary machine types on the same keyboard — so the usual
+    /// answer here is that there is nothing to do, and turning the carousel
+    /// costs nothing.
+    ///
+    /// A layout that will not compile leaves the machine's own, which is what
+    /// this greeter came up with. Not the ANSI rows the failed read has just
+    /// left behind: a board is worse for being a picture of nothing, and an
+    /// account naming a layout this machine's xkeyboard-config does not have is
+    /// still an account whose machine has a keyboard.
+    fn set_keyboard(&mut self, wanted: (String, String)) {
+        if wanted == self.keyboard {
+            return;
+        }
+        if cedm::keyboard::note_layout(&wanted.0, &wanted.1) {
+            tracing::info!(
+                layout = wanted.0,
+                variant = wanted.1,
+                "the on-screen keyboard follows the account being looked at"
+            );
+            self.keyboard = wanted;
+            return;
+        }
+        // Read again whatever it was before, because the attempt that failed
+        // has already put the board back on its own ANSI rows.
+        cedm::keyboard::note_layout(&self.machine_keyboard.0, &self.machine_keyboard.1);
+        self.keyboard = self.machine_keyboard.clone();
+    }
+
     fn select_user_with_motion(&mut self, next: usize, delta: isize) {
         // One past the enumerated profiles is the non-enumerated route, which
         // is a legitimate selection without being a page of the carousel.
@@ -868,17 +947,23 @@ impl Application {
             shift,
             started: now,
         });
-        if self.other_account_selected() {
+        let keyboard = if self.other_account_selected() {
             self.selected_session = self.other_session;
             self.accent = cedm::accent::DEFAULT_ACCENT.to_string();
             self.material = Materials::default();
+            // Nobody is named, so there is no account whose keyboard this
+            // could be: the machine's own, which is what it was before any
+            // account was looked at.
+            self.machine_keyboard.clone()
         } else {
             self.selected_session = self.user_sessions[self.selected_user];
             self.accent = self.user_accents[self.selected_user].clone();
             self.material = self.user_themes[self.selected_user].clone();
-        }
+            self.user_keyboards[self.selected_user].clone()
+        };
         visual::theme::preview_accent(&self.accent);
         self.material.preview();
+        self.set_keyboard(keyboard);
     }
 
     fn cycle_user(&mut self, delta: isize) {
@@ -1309,7 +1394,14 @@ impl Application {
             Press::Type(Stroke::Named("Return")) => self.submit(),
             Press::Type(Stroke::Named("Escape")) => self.cancel(),
             Press::Close => self.hide_keyboard(Focus::Prompt),
-            Press::Type(_) | Press::Shifted => {}
+            // A dead key among them: the board types into this field rather
+            // than through a keymap, so there is nothing here for an accent to
+            // combine with and it is dropped. It stays *on* the board because a
+            // key that is on the keyboard and missing from the picture of it is
+            // a picture that is wrong — and because the letters it would have
+            // made are on the AltGr face of this board anyway, where they can
+            // be typed directly.
+            Press::Type(_) | Press::Shifted | Press::Nothing => {}
         }
     }
 
@@ -2784,6 +2876,22 @@ fn user_theme(state: &State, user: &User) -> Materials {
         wallpaper: of(visual::theme::Part::Wallpaper),
         icons: of(visual::theme::Part::Icons),
     }
+}
+
+/// The keyboard the on-screen board should be a picture of for `user`.
+///
+/// The account's own settings first and the copy they published second, which
+/// is the same order of freshness [`user_accent`] walks — and then the
+/// machine's own keyboard rather than the broker's state, which has never held
+/// this and does not need to. A colour nobody has published has to be invented;
+/// a keyboard does not, because the machine this greeter is running on has one.
+///
+/// The published copy is what answers on an ordinary machine, where a home
+/// directory is not the greeter's to walk into. See [`cedm::look`].
+fn user_keyboard(user: &User, machine: &(String, String)) -> (String, String) {
+    cedm::accent::read_keyboard_for_home(&user.home)
+        .or_else(|| cedm::look::published(&user.name, user.uid).and_then(|look| look.keyboard()))
+        .unwrap_or_else(|| machine.clone())
 }
 
 fn user_accent(state: &State, user: &User) -> String {

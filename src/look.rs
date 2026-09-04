@@ -139,6 +139,21 @@ pub struct Look {
     /// rather than becoming a silent statement about a setting it never made.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    /// Which arrangement the account's keyboards are set to, as the one key
+    /// `shell.toml` writes both halves of that answer in — `pl (qwertz)`, or a
+    /// bare layout where there is no variant.
+    ///
+    /// The one thing carried here that is about what somebody can *type* rather
+    /// than what they are looking at, and the reason it is carried is the same
+    /// as the reason it is a setting at all: a password with a Polish or a
+    /// French letter in it cannot be typed on a board offering American ones,
+    /// and this login screen draws the board. See [`Look::keyboard`].
+    ///
+    /// It says nothing about the physical keyboard, which belongs to whichever
+    /// compositor is holding the seat and is the machine's own business before
+    /// anybody has signed in. This is what the *picture* of one prints.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub keyboard_layout: Option<String>,
     /// What a display with no section of its own is set to, which is the
     /// shell's own arrangement for these four keys.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -256,6 +271,17 @@ impl Look {
         accent::canonical_theme(named)
     }
 
+    /// The layout and variant this look asks a board to print, as xkb names
+    /// them.
+    ///
+    /// Not checked against xkeyboard-config here, because this greeter has no
+    /// business holding a second list of every layout in the world: a name it
+    /// cannot compile is found out by compiling it, and the board falls back to
+    /// its own ANSI rows. See [`crate::keyboard::note_layout`].
+    pub fn keyboard(&self) -> Option<(String, String)> {
+        crate::keyboard::layout_key(self.keyboard_layout.as_deref()?)
+    }
+
     /// Where the sun is worked out for.
     ///
     /// The account's own settings first, then the machine's time zone, in the
@@ -289,6 +315,12 @@ impl Look {
         if let Some(config) = read_toml::<CompositorConfig>(&compositor) {
             look.output_layout = config.general.output_layout;
             look.output_gap = config.general.output_gap;
+            // The shell first, as everywhere else here: `[input]` is what the
+            // session *starts* at, and `keyboard-layout` is what somebody has
+            // since chosen on a page in front of them. A machine whose owner
+            // set the layout by hand and never opened that page has only the
+            // one answer, and it is this one.
+            look.keyboard_layout = look.keyboard_layout.take().or_else(|| config.input.key());
             for output in config.outputs {
                 let display = look.display.entry(output.name).or_default();
                 display.position = display.position.or(output.position);
@@ -371,6 +403,18 @@ impl Look {
         self.sound_gain = self
             .sound_gain
             .filter(|gain| gain.is_finite() && (0.0..=1.0).contains(gain));
+        // An xkb layout and variant, and it arrives in a file an account
+        // writes. Bounded and held to the characters xkeyboard-config names its
+        // own layouts and variants with, on the same terms as the sound card
+        // above: it is about to be handed to a keymap compiler and written into
+        // the log.
+        self.keyboard_layout = self.keyboard_layout.filter(|key| {
+            !key.is_empty()
+                && key.len() <= 64
+                && key.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || "-_() ".contains(character)
+                })
+        });
         self.output_layout = self
             .output_layout
             .filter(|layout| LAYOUTS.contains(&layout.as_str()));
@@ -705,6 +749,7 @@ fn is_mode(mode: &str) -> bool {
 #[serde(default)]
 struct CompositorConfig {
     general: CompositorGeneral,
+    input: CompositorInput,
     #[serde(rename = "output")]
     outputs: Vec<CompositorOutput>,
 }
@@ -714,6 +759,31 @@ struct CompositorConfig {
 struct CompositorGeneral {
     output_layout: Option<String>,
     output_gap: Option<i32>,
+}
+
+/// What the session's keyboards start at, which is the answer on a machine
+/// whose owner has never opened the shell's own page for it.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct CompositorInput {
+    keyboard_layout: Option<String>,
+    keyboard_variant: Option<String>,
+}
+
+impl CompositorInput {
+    /// The pair written the way `shell.toml` writes it, so that a look carries
+    /// one key whichever of the two files answered and nothing downstream has
+    /// to know which did.
+    fn key(&self) -> Option<String> {
+        let layout = self.keyboard_layout.as_deref()?.trim();
+        if layout.is_empty() {
+            return None;
+        }
+        match self.keyboard_variant.as_deref().unwrap_or_default().trim() {
+            "" => Some(layout.to_string()),
+            variant => Some(format!("{layout} ({variant})")),
+        }
+    }
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -1089,6 +1159,70 @@ enabled = false
         // session was started with.
         assert_eq!(look.display["TEST-OUT-1"].hdr, Some(true));
         fs::remove_dir_all(home).unwrap();
+    }
+
+    /// The keyboard an account types on is carried like the accent is, and out
+    /// of both files: the shell's own setting is what somebody chose on a page,
+    /// and the compositor's `[input]` is what the session starts at on a
+    /// machine whose owner has never opened that page.
+    #[test]
+    fn the_keyboard_an_account_types_on_is_carried_out_of_whichever_file_has_it() {
+        let chosen = home_with(
+            "keyboard-layout = \"pl (qwertz)\"\n",
+            Some("[input]\nkeyboard_layout = \"de\"\nkeyboard_variant = \"neo\"\n"),
+        );
+        assert_eq!(
+            Look::read(&chosen, None).keyboard(),
+            Some(("pl".to_string(), "qwertz".to_string())),
+            "the page somebody chose on outranks the file the session started with"
+        );
+        fs::remove_dir_all(chosen).unwrap();
+
+        let started = home_with(
+            "accent = \"Red\"\n",
+            Some("[input]\nkeyboard_layout = \"de\"\nkeyboard_variant = \"neo\"\n"),
+        );
+        assert_eq!(
+            Look::read(&started, None).keyboard(),
+            Some(("de".to_string(), "neo".to_string()))
+        );
+        fs::remove_dir_all(started).unwrap();
+
+        // A layout with no variant is one key either way round, and a file
+        // that names no keyboard at all names none.
+        let bare = home_with(
+            "accent = \"Red\"\n",
+            Some("[input]\nkeyboard_layout = \"fr\"\n"),
+        );
+        assert_eq!(
+            Look::read(&bare, None).keyboard(),
+            Some(("fr".to_string(), String::new()))
+        );
+        fs::remove_dir_all(bare).unwrap();
+
+        let silent = home_with(SHELL, None);
+        assert_eq!(Look::read(&silent, None).keyboard(), None);
+        fs::remove_dir_all(silent).unwrap();
+    }
+
+    /// The key arrives in a file an account writes, and goes to a keymap
+    /// compiler and into the log. Anything that is not an xkb name is not one.
+    #[test]
+    fn a_keyboard_key_that_is_not_an_xkb_name_is_dropped() {
+        let kept = |key: &str| {
+            Look {
+                keyboard_layout: Some(key.to_string()),
+                ..Look::default()
+            }
+            .sane()
+            .keyboard_layout
+        };
+        assert_eq!(kept("pl (qwertz)").as_deref(), Some("pl (qwertz)"));
+        assert_eq!(kept("us"), None.or(Some("us".to_string())));
+        assert_eq!(kept(""), None);
+        assert_eq!(kept("pl; rm -rf /"), None);
+        assert_eq!(kept("../../etc/passwd"), None);
+        assert_eq!(kept(&"a".repeat(65)), None);
     }
 
     #[test]

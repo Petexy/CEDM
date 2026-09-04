@@ -1,5 +1,5 @@
 Name:           cedm
-Version:        0.1.0
+Version:        0.9.0
 Release:        1%{?dist}
 Summary:        Controller-first graphical display manager for console and desktop sessions
 
@@ -13,8 +13,9 @@ ExclusiveArch:  x86_64 aarch64
 
 # Cargo's release profile emits no DWARF, so find-debuginfo would produce an
 # empty debugsourcefiles.list and rpmbuild would fail on it after the whole
-# build. An archive submission wants real debuginfo instead: drop this and
-# build with `-Cdebuginfo=2 -Cstrip=none` under Fedora's own remapping.
+# build. An archive submission wants real debuginfo instead: drop this, and
+# with it the -Cdebuginfo=0 in %build that holds Fedora's own -Cdebuginfo=2 off,
+# so the DWARF is built and packaged rather than built and binned.
 %global debug_package %{nil}
 
 %global greeter_account cedm-greeter
@@ -85,16 +86,53 @@ the unit makes CEDM the machine's login screen.
 
 %build
 export CARGO_TARGET_DIR=target
-export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=%{_builddir}=/usr/src/debug/%{name}-%{version}"
-cargo build --frozen --release --bins
+# -Cdebuginfo=0 last, and it is not repeating the release profile. RUSTFLAGS is
+# appended after the profile's own flags and wins, and Fedora's
+# %%{build_rustflags} — already in RUSTFLAGS by the time this runs — carries
+# -Cdebuginfo=2 -Cstrip=none. With %%global debug_package %%{nil} above there is
+# no debuginfo package for that DWARF to go in, so it was being generated at
+# full cost and thrown away.
+export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=%{_builddir}=/usr/src/debug/%{name}-%{version} -Cdebuginfo=0"
+
+# Cargo takes its job count from the core count alone and knows nothing about
+# how much memory the machine has to hold that many rustc at once. Under this
+# profile — thin LTO, one codegen unit — the final one measures 1258 MiB here,
+# and 1452 MiB with the DWARF that the line above now turns off. Eight of those
+# together is more than a small machine has; the sister repository's shell was
+# killed by the kernel's OOM killer twice on an 8 GiB Apple M1 for exactly this.
+#
+# Arithmetic rather than %%limit_build, which is the Fedora macro meant for this
+# and which swallowed the remainder of the script it was used in on Fedora
+# Asahi.
+build_jobs="%{_smp_build_ncpus}"
+build_room="$(awk '/^MemTotal:/ { n = int($2 / 1024 / 2048); print (n < 1 ? 1 : n) }' /proc/meminfo 2>/dev/null || true)"
+if [ -n "$build_room" ] && [ "$build_room" -lt "$build_jobs" ]; then
+    build_jobs="$build_room"
+fi
+echo "building with $build_jobs of %{_smp_build_ncpus} jobs, for the memory this machine has"
+cargo build --frozen --release --bins -j"$build_jobs"
 
 %check
 export CARGO_TARGET_DIR=target
 # `cargo test` already builds in the dev profile. Nothing here may pin an
 # optimisation level: RUSTFLAGS is appended after the profile's own flags and
 # wins, so a level named here would silently override the profile.
-export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=%{_builddir}=/usr/src/debug/%{name}-%{version}"
-cargo test --frozen --lib --bins
+#
+# -Cdebuginfo=0 overrides a profile setting on purpose, which is that same
+# hazard turned around: the dev profile asks for full DWARF, this phase builds
+# the graph a second time to get it, and no package is ever made of it. A
+# failing test still names its file and line, which comes from the panic rather
+# than from DWARF.
+export RUSTFLAGS="${RUSTFLAGS:-} --remap-path-prefix=%{_builddir}=/usr/src/debug/%{name}-%{version} -Cdebuginfo=0"
+
+# The same cap as %%build, for a phase that is lighter per process and heavier
+# in total: no LTO here, but a test binary as well as the program.
+build_jobs="%{_smp_build_ncpus}"
+build_room="$(awk '/^MemTotal:/ { n = int($2 / 1024 / 2048); print (n < 1 ? 1 : n) }' /proc/meminfo 2>/dev/null || true)"
+if [ -n "$build_room" ] && [ "$build_room" -lt "$build_jobs" ]; then
+    build_jobs="$build_room"
+fi
+cargo test --frozen --lib --bins -j"$build_jobs"
 
 %install
 export CARGO_TARGET_DIR=target
@@ -193,5 +231,25 @@ fi
 %config(noreplace) %{_sysconfdir}/%{name}/greetd.toml
 
 %changelog
+* Sun Aug 30 2026 Piotr Lewandowski <piotr.petexy@gmail.com> - 0.9.0-1
+- Thirty-two commits on from the first package. What is new since 0.1.0:
+- The greeter is drawn in LineXinBar's own material: every mark is a shape with
+  the water computed rather than painted, the hour is written in that same
+  water, and the band of water is taken from the shell along with the v2 of it
+  that knows how big a sample is.
+- It reads both halves of the shell's Theme and is drawn in them, and a machine
+  showing the user's own picture is greeted by the scene instead.
+- The login screen rises into the wallpaper rather than appearing in one frame,
+  and the black comes off in a tenth of a second.
+- Sound: LineXinBar's own four clips, played out of the speakers the session
+  uses rather than the first socket that opens, and only after a default sink
+  exists to publish.
+- Nine languages, said in the one the machine is set to.
+- The seven accent colours the shell offers, for the screen in front of it, and
+  a mark that fades out with the screen it stands on.
+- A real GL fallback rather than a named one, and the wallpaper's clock started
+  once a boot rather than once a login screen.
+- cedm.service is enabled on a first install, the way a display manager is.
+
 * Fri Aug 14 2026 Piotr Lewandowski <piotr.petexiness@gmail.com> - 0.1.0-1
 - Initial early-development package

@@ -1,6 +1,10 @@
 /target/
 *.log
 
+# Dolphin's per-folder view settings, which belong to whoever is looking at
+# the checkout rather than to the checkout.
+.directory
+
 # Built packages and the source archives they are cut from. `snapshot_source`
 # skips these by name too, so an archive can never contain a previous one.
 /packaging/out/

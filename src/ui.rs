@@ -2329,10 +2329,21 @@ fn glyph(scene: &mut Scene, slot: u32, rect: [f32; 4], share: f32, color: [f32; 
 /// The whole of the migration to the material, and the reason it is one
 /// function: `visual::measured` is the only place that knows which cells hold a
 /// measurement, and every mark in this program reaches a frame through here.
+///
+/// The alpha moves as well as the depth, and it has to. On a picture, `color`
+/// is multiplied into the texel and its alpha is how solid the drawing comes
+/// out; on a measured shape the colour is the *stain* — `glyph_material` reads
+/// its three channels and builds the alpha itself out of the field, then
+/// multiplies that by `fade` and by nothing else. A mark that kept its alpha in
+/// `color` would therefore not be drawn any fainter for having been asked for
+/// faintly: it would stand at full strength over a screen fading out from under
+/// it, which is what every caller of [`glyph`] used to ask for.
 fn shaded(mut quad: Quad) -> Quad {
     if visual::measured(quad.slot) {
         quad.thickness = quad.rect[2].min(quad.rect[3]) * visual::field::DEPTH;
         quad.gloss = GLOSS_FULL;
+        quad.fade *= quad.color[3];
+        quad.color[3] = 1.0;
     }
     quad
 }
@@ -2373,7 +2384,8 @@ fn build_keyboard(
             let [x, y, w, h] = keyboard_key_rect(row, column, width, height);
             let rect = [x, y + lift, w, h];
             let focused = (row, column) == selected;
-            let held = board.latched(key) != Latch::Off;
+            let latch = board.latched(key);
+            let held = latch != Latch::Off;
             if focused {
                 let glow = h * 2.2;
                 output.scene.quads.push(Quad {
@@ -2388,28 +2400,50 @@ fn build_keyboard(
                     ..Quad::default()
                 });
             }
+            // One fill, the selected key included. It used to be a chain that
+            // asked `focused` first, so a modifier armed or locked from the
+            // board showed nothing at all until the cursor was walked off it —
+            // and the cursor is standing on the key that was just pressed. That
+            // reads as a key needing two presses to come back off.
+            //
+            // And a held key is drawn *darker* rather than as a brighter cast
+            // of the accent, which is the colour the cursor is drawn in: two
+            // readings competing to mean two things. A key holding the board
+            // down is a key pressed into the panel, so it is the panel's own
+            // near-black glass, and twice as much of it locked as armed.
             output.scene.quads.push(Quad {
                 rect,
-                color: if focused {
-                    palette.accent.a(0.52 + 0.05 * pulse)
-                } else if held {
-                    palette.accent.a(if board.latched(key) == Latch::Locked {
-                        0.50
-                    } else {
-                        0.32
-                    })
-                } else if matches!(key, Key::Char(..)) {
-                    palette.glass_raised.a(0.10)
-                } else {
-                    palette.glass_raised.a(0.17)
+                color: match latch {
+                    Latch::Locked => palette.glass.a(0.72),
+                    Latch::Once => palette.glass.a(0.40),
+                    Latch::Off if focused => palette.accent.a(0.52 + 0.05 * pulse),
+                    Latch::Off if matches!(key, Key::Char(..)) => palette.glass_raised.a(0.10),
+                    Latch::Off => palette.glass_raised.a(0.17),
                 },
                 radius: KEY_RADIUS * scale,
                 corner: visual::SQUIRCLE_CORNER,
                 thickness: DEPTH_CONTROL * scale,
                 frost: FROST_CONTROL,
-                gloss: if focused { GLOSS_FULL } else { GLOSS_QUIET },
+                // A pressed key does not catch the light a raised one does.
+                gloss: if focused && !held {
+                    GLOSS_FULL
+                } else {
+                    GLOSS_QUIET
+                },
                 ..Quad::default()
             });
+            // The cursor's own rim, and only on a key whose fill a latch has
+            // taken over. Everywhere else the fill *is* the selection.
+            if focused && held {
+                output.scene.quads.push(Quad {
+                    rect,
+                    color: palette.accent_soft.a(0.62 + 0.10 * pulse),
+                    radius: KEY_RADIUS * scale,
+                    corner: visual::SQUIRCLE_CORNER,
+                    border: 2.0 * scale,
+                    ..Quad::default()
+                });
+            }
             if key.is_close() {
                 output.scene.quads.push(Quad {
                     rect,
@@ -2429,7 +2463,7 @@ fn build_keyboard(
                     palette.text.a(if focused { 1.0 } else { 0.82 }),
                 );
             } else {
-                let label = key.cap(board.shifted());
+                let label = key.cap(board.level());
                 let size = if row == 0 {
                     KEY_CAP_FUNCTION * scale
                 } else if matches!(key, Key::Char(..)) {
@@ -3268,6 +3302,16 @@ mod tests {
                     quad.slot,
                 );
                 if quad.glyph_material() {
+                    // And drawn at the strength it was asked for. On this path
+                    // the shader reads the colour's three channels as the stain
+                    // and builds the alpha itself, so a mark still carrying its
+                    // solidity in `color` is one nothing can make fainter —
+                    // see [`shaded`].
+                    assert_eq!(
+                        quad.color[3], 1.0,
+                        "{where_}: cell {} keeps its solidity in its colour",
+                        quad.slot,
+                    );
                     if (visual::LETTER_SLOT..visual::FACE_SLOT).contains(&quad.slot) {
                         letters += 1;
                     } else {
@@ -3308,6 +3352,76 @@ mod tests {
             interactive: true,
         });
         check("the session menu", one_display(open, 1600.0, 900.0));
+    }
+
+    /// A mark fades out with the screen it is standing on.
+    ///
+    /// The mirror of the test above and the second half of the same rule.
+    /// `glyph_material` multiplies a mark's own alpha by `fade` and by nothing
+    /// else — the colour it is handed is the stain and its alpha is never read
+    /// — so a caller asking for a faint mark by dimming its tint is asking for
+    /// nothing at all. Every mark on this screen was doing exactly that: the
+    /// four footer glyphs, the session badge, the back arrow and the submit
+    /// arrow stayed solid over a column, a set of labels and a clock that all
+    /// faded out from under them, which is what the 300 ms departure at the end
+    /// of a login looks like on a machine slow enough to show it.
+    #[test]
+    fn a_mark_fades_out_with_the_screen_it_is_standing_on() {
+        let users = [user("Alex"), user("Bo")];
+        let sessions = [session("LineXinBar"), session("Plasma")];
+        // Deliberately not with the board up. The on-screen keyboard leaves on
+        // its own, by sliding off the bottom of the display rather than by
+        // fading, so its key marks are the one kind here that is not part of
+        // this and would answer for the wrong reason.
+        let screen = |arrival: f32| {
+            let mut view = view(
+                &users,
+                &sessions,
+                Phase::Authenticating {
+                    prompt: "Password",
+                    secret: true,
+                    input: "hunter2",
+                },
+                Focus::Prompt,
+                FOOTER.as_slice(),
+            );
+            view.arrival = arrival;
+            one_display(view, 1600.0, 900.0)
+        };
+        let marks = |output: &Output| -> Vec<Quad> {
+            output
+                .scene
+                .quads
+                .iter()
+                .copied()
+                .filter(|quad| quad.glyph_material())
+                .collect()
+        };
+
+        let here = marks(&screen(1.0));
+        let going = marks(&screen(0.35));
+        assert!(here.len() > 6, "{} marks were drawn", here.len());
+        assert_eq!(
+            here.len(),
+            going.len(),
+            "a screen on its way out draws a different set of marks",
+        );
+        for (whole, faded) in here.iter().zip(&going) {
+            assert_eq!(whole.slot, faded.slot);
+            // What actually reaches the display is `fade`, so that is where the
+            // question has to be asked. Both of these read 1.0 in the colour;
+            // asserting on `color[3] * fade` would pass whichever field the
+            // strength was in, which is how this shipped.
+            assert_eq!(whole.color[3], 1.0);
+            assert_eq!(faded.color[3], 1.0);
+            assert!(
+                faded.fade < whole.fade * 0.5,
+                "cell {} is drawn at {} of a screen 35% arrived and {} of one fully here",
+                whole.slot,
+                faded.fade,
+                whole.fade,
+            );
+        }
     }
 
     /// The clock is the half of the design that has room to be dropped. A

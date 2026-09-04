@@ -37,6 +37,7 @@
 //! routinely. Reading them as an answer would make the login screen ignore the
 //! very file the machine's language is written in.
 
+use std::cell::Cell;
 use std::path::Path;
 use std::sync::atomic::{AtomicU8, Ordering};
 
@@ -384,13 +385,30 @@ fn read_bounded(path: &Path) -> Option<String> {
 /// everywhere after.
 static LANGUAGE: AtomicU8 = AtomicU8::new(0);
 
+thread_local! {
+    /// The language one thread is speaking, where something has asked it to speak
+    /// a particular one.
+    ///
+    /// Only ever set inside [`with_language`], and only ever by a test. The greeter
+    /// itself sets [`LANGUAGE`] once from `main` and never touches this, so what it
+    /// costs outside a test is one thread-local read for each word drawn.
+    ///
+    /// A thread-local and not a second global, which is the whole point: a test
+    /// asking for a screen in Chinese must not put another test's screen into
+    /// Chinese halfway through drawing it.
+    static SPOKEN: Cell<Option<Language>> = const { Cell::new(None) };
+}
+
 /// Fix the language for this process. Called once, from `main`.
 pub fn set(language: Language) {
     LANGUAGE.store(language.code(), Ordering::Relaxed);
 }
 
 pub fn language() -> Language {
-    Language::from_code(LANGUAGE.load(Ordering::Relaxed))
+    match SPOKEN.get() {
+        Some(spoken) => spoken,
+        None => Language::from_code(LANGUAGE.load(Ordering::Relaxed)),
+    }
 }
 
 /// Everything the screen says, in the language it is set to.
@@ -400,27 +418,26 @@ pub fn text() -> &'static Strings {
 
 /// Run `body` with the screen speaking `language`, and put it back afterwards.
 ///
-/// The companion of `theme::with_accent`, and it holds a lock for the same
-/// reason: the language is process-wide, so two tests changing it at once
-/// would each be reading the other's. Every test that asserts on a *word*
-/// belongs inside one of these, including the tests that assert on an English
-/// one.
+/// The answer is kept to the calling thread — see [`SPOKEN`] — so a sweep
+/// through all nine languages is invisible to every other test running beside
+/// it. It was a lock and the process-wide language once, and a lock is the
+/// wrong shape for this: it stops two tests *writing* at the same time and does
+/// nothing about the ones reading, which is every test that draws a screen with
+/// a word on it. Those were then correct only by luck, and about once in ten
+/// runs one of them was handed half a screen in somebody else's language.
 pub fn with_language<T>(language: Language, body: impl FnOnce() -> T) -> T {
-    static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
-    let guard = LOCK.lock().unwrap_or_else(|error| error.into_inner());
-    let restore = Restore(self::language());
-    set(language);
+    let restore = Restore(SPOKEN.replace(Some(language)));
     let answer = body();
     drop(restore);
-    drop(guard);
     answer
 }
 
-struct Restore(Language);
+/// Put the thread back to whatever it was speaking, panic or no panic.
+struct Restore(Option<Language>);
 
 impl Drop for Restore {
     fn drop(&mut self) {
-        set(self.0);
+        SPOKEN.set(self.0);
     }
 }
 
