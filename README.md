@@ -2,7 +2,7 @@
 
 A controller-first graphical greeter for LineXinBar and ordinary Linux desktop sessions.
 
-This repository is an early, runnable vertical slice. It already renders LineXinBar's exact analytic wallpaper, palette and Liquid Glass material; presents local and directory-user routes in a compact console-style carousel; discovers and directly launches installed Wayland session entries without invoking a shell; conducts PAM conversations through greetd; supports controller, mouse and physical-keyboard navigation; embeds the same ANSI on-screen keyboard geometry; draws a whole login screen on every display rather than one across all of them; remembers successful public account/session choices; speaks nine languages, taken from whichever file this distribution keeps the machine's locale in; and hands the wallpaper clock to LineXinBar after authentication.
+This repository is an early, runnable vertical slice. It already renders LineXinBar's exact analytic wallpaper, palette and Liquid Glass material; presents local and directory-user routes in a compact console-style carousel; discovers and directly launches installed Wayland session entries without invoking a shell; conducts PAM conversations through greetd; supports controller, mouse and physical-keyboard navigation; embeds the same ANSI on-screen keyboard geometry; draws a whole login screen on every display rather than one across all of them; remembers successful public account/session choices; speaks ten languages, taken from whichever file this distribution keeps the machine's locale in; and hands the wallpaper clock to LineXinBar after authentication.
 
 ## The screen
 
@@ -39,7 +39,7 @@ The three drawings this repository has to make for itself — suspend, the route
 
 The hour is drawn in that material too, and it is the one piece of *type* that is: `lxb-desktop` draws the clock in the corner of its start screen as a bead of water rather than as flat coverage, this screen hands over to that one within a few seconds, and two readings of the same material in front of the same person is the seam this whole project exists to avoid. So the eleven characters a twenty-four hour clock can contain — ten digits and a colon — are cut out of the bundled bold Roboto once at start, measured into signed distance fields, and drawn as one quad per letter through the shell's own `glyph_material`. They are tinted with the accent's own pale cast rather than the near-white the rest of the interface is lettered in, because the clock stands on the wallpaper with nothing behind it and it is the one thing on this screen that says which palette the account being signed into keeps.
 
-The second line under it cannot follow and is not meant to. It is *words*, in nine languages, in Latin, Cyrillic, Devanagari and Han — a cell per codepoint is not a text renderer, and Chinese alone would want a thousand of them. It stays a text run in the same tint, which is what keeps the two lines one object: the colour carries the accent, the material carries the hour.
+The second line under it cannot follow and is not meant to. It is *words*, in ten languages, in Latin, Cyrillic, Devanagari and Han — a cell per codepoint is not a text renderer, and Chinese alone would want a thousand of them. It stays a text run in the same tint, which is what keeps the two lines one object: the colour carries the accent, the material carries the hour.
 
 Two numbers in the ported material are this atlas's rather than the shell's, and both follow from one fact — a cell here is 256 pixels where the shell's is 128, because this atlas also holds photographs of people. The field's gradient is read three texels out rather than one and a half, since an arm is a filter width and belongs to the cell; read at the shell's number it leaves the eight-bit field's own steps in the surface normal, which a specular of the forty-second power lays along every straight stem as a row of dashes. And the shapes are measured on a grid four times the cell, not twice: at twice, a letter's edge is quantised to half a cell texel, and on a clock drawn at nearly the size of its own cell that is a third of a screen pixel of wobble. Both were found on screen and nowhere else.
 
@@ -237,7 +237,7 @@ optional field, because the reader it is written for is a compositor drawing a
 bridge frame in front of this greeter: it runs as the greeter's own account and
 cannot read the settings of the person about to sign in, and what it draws is a
 wallpaper and never a mark. That is also what kept the record byte-for-byte
-unchanged across the split. Any pixel-affecting shader/palette change must update both projects and bump that identifier. The copied files carry an origin manifest in [`vendor/line-xinbar/ORIGIN.md`](vendor/line-xinbar/ORIGIN.md).
+unchanged across the split. Any pixel-affecting shader/palette change must update both projects and bump that identifier. The copied files carry an origin manifest in [`vendor/linexinbar/ORIGIN.md`](vendor/linexinbar/ORIGIN.md).
 
 ## Handing the displays over
 
@@ -351,7 +351,7 @@ It is longer than every other movement here because it is the only one that is n
 
 ## What a button sounds like
 
-Four recordings, and they are LineXinBar's own — copied into `assets/sounds/`, recorded in [`vendor/line-xinbar/ORIGIN.md`](vendor/line-xinbar/ORIGIN.md), and shipped in the binary for the same reason the fonts and the glyphs are: a login screen runs before any desktop does, and there may be no theme of sounds on the machine to borrow one from. Signing in and using the shell that follows are meant to be one instrument.
+Four recordings, and they are LineXinBar's own — copied into `assets/sounds/`, recorded in [`vendor/linexinbar/ORIGIN.md`](vendor/linexinbar/ORIGIN.md), and shipped in the binary for the same reason the fonts and the glyphs are: a login screen runs before any desktop does, and there may be no theme of sounds on the machine to borrow one from. Signing in and using the shell that follows are meant to be one instrument.
 
 | When | Clip |
 | --- | --- |
@@ -409,7 +409,25 @@ From the machine, because nobody has signed in yet to have a preference. That is
 2. `language` in `/etc/cedm/config.toml`, which is the administrator saying so outright — for the machine whose login screen should *not* be in the machine's language, such as a shared terminal in a building where the desks were set up in one language and the people signing in read another.
 3. `LC_ALL`, `LC_MESSAGES`, `LANG` in the greeter's own environment, in POSIX's order of precedence.
 4. The machine's locale file, in this order, first value found: `/etc/locale.conf` (systemd — Arch, Fedora, openSUSE), `/etc/default/locale` (Debian, Ubuntu), `/etc/sysconfig/i18n` (older Red Hat and SUSE), `/etc/env.d/02locale` and `/etc/conf.d/locale` (Gentoo), `/etc/environment` (PAM's environment file, which some installers put `LANG` into as well). All six are `KEY=value` lines, which is why one parser serves them; they are read, never run.
-5. English.
+5. English (UK).
+
+A locale names a language, and it names a **country** only where two of these
+ten answer to one language, which is exactly `en_US`. So `en_US` is English
+(US), and every other English — `en_GB`, `en_AU`, a bare `en` — is English
+(UK), the English this greeter is written in. It changes nothing for Portuguese
+or Chinese: Brazilian Portuguese is the Portuguese that was written and
+Simplified Chinese is the Chinese that was written, so `pt_PT` and `zh_TW` find
+no country of their own and land on those, which is a better answer for a
+reader of the other variant than English is.
+
+The two Englishes say the same words — this screen writes no month and none of
+the handful of words the two spell differently — and differ over one visible
+thing: which of the two clocks the hour is written on for an account that has
+not chosen. See [the clock](docs/localization.md#the-clock).
+
+This is also how the login screen follows the desktop: LineXinBar's Settings > Language sets the machine's locale through `systemd-localed`, which writes `/etc/locale.conf` — the first file in the list above. Nothing has to be told; the next greeter to start reads it. An administrator who wants the login screen in a different language from the machine says so in `/etc/cedm/config.toml`, which outranks it.
+
+See [localization](docs/localization.md) for what is in `src/i18n.rs`, how to look at a translation, and how to add a language.
 
 The first file that *answers* wins rather than the first that exists, because a machine can carry two of them: an empty `/etc/locale.conf` beside a populated `/etc/default/locale` is an ordinary Debian, and stopping at the empty one would read the machine as having no language at all.
 
@@ -435,7 +453,7 @@ The on-screen board's character keys are not translated and will not be. It is a
 
 The clock's second line is a pattern rather than a weekday with a number after it, because the languages disagree about the order and about whether the number is marked: `Mon 17`, `Mo 17.`, `пн 17`, `17日 周一`. The line above it — the hour itself — is `HH:MM` in every language, which is what allows it to be drawn out of eleven measured shapes instead of shaped as text; see the screen, above.
 
-Roboto carries Latin, Latin Extended, Greek and Cyrillic — eight of the nine — and no Devanagari and no Han at all, so two Noto faces are bundled beside it in `assets/fonts/` and compiled into the binary with everything else. Without them the Hindi and Chinese columns rasterise to rows of empty boxes, and nothing else in the build would say a word about it. Devanagari is subset to the whole script, so an account named in it draws too; the Han face is subset to the characters this program's own words are made of, because the whole of Noto Sans CJK is twenty megabytes. An account or a session named in Han falls back to whatever the machine has installed — which on a machine with a Chinese desktop is a full CJK face, and on one without is a machine with no Han names to draw.
+Roboto carries Latin, Latin Extended, Greek and Cyrillic — nine of the ten — and no Devanagari and no Han at all, so two Noto faces are bundled beside it in `assets/fonts/` and compiled into the binary with everything else. Without them the Hindi and Chinese columns rasterise to rows of empty boxes, and nothing else in the build would say a word about it. Devanagari is subset to the whole script, so an account named in it draws too; the Han face is subset to the characters this program's own words are made of, because the whole of Noto Sans CJK is twenty megabytes. An account or a session named in Han falls back to whatever the machine has installed — which on a machine with a Chinese desktop is a full CJK face, and on one without is a machine with no Han names to draw.
 
 ### Two checks, because a translation is not a string
 
@@ -463,7 +481,7 @@ Previewing is deliberately separate from installing/configuring the system greet
 2. Add AccountsService/NSS enumeration while retaining the bounded, privacy-safe “Other account” route for LDAP/NIS and hidden users.
 3. Move multi-seat preference coordination and broker-owned accent refresh into the seat service.
 4. Give the greeter a surface per output, so that it draws on every screen under an ordinary compositor and not only under a kiosk one. That is what makes `CEDM_GREETER_COMPOSITOR=lxb` — and with it the login screen's modes, layout and high dynamic range — the default rather than an opt-in for single-display machines; see [What the greeter cannot do with it](#what-the-greeter-cannot-do-with-it).
-5. Add screen reader/a11y semantics. (Localisation is done, in nine languages taken from the machine's own locale: see [What it says, and in which language](#what-it-says-and-in-which-language). Multi-output layout is done too: see [Every display is a display](#every-display-is-a-display). What is left of that is per-output scale factors, which need the layout in logical coordinates the compositor's own broker will publish.)
+5. Add screen reader/a11y semantics. (Localisation is done, in ten languages taken from the machine's own locale: see [What it says, and in which language](#what-it-says-and-in-which-language). Multi-output layout is done too: see [Every display is a display](#every-display-is-a-display). What is left of that is per-output scale factors, which need the layout in logical coordinates the compositor's own broker will publish.)
 6. Add the isolated X11 server/auth wrapper, then expose parsed X11 entries.
 7. Add nested GPU golden frames and real-VT end-to-end tests for LineXinBar and Plasma.
 8. Close the last black interval — the one with no DRM master in it — as part of step 1, and add golden-frame coverage of the whole handover.

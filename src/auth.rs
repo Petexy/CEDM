@@ -239,7 +239,7 @@ fn run(
                     let _ = events.send(Event::Failed {
                         attempt,
                         failure: Failure::Service,
-                        message: "No authentication conversation is active".to_string(),
+                        message: crate::i18n::text().attempt_lost.to_string(),
                     });
                     continue;
                 };
@@ -282,7 +282,7 @@ fn run(
                     let _ = events.send(Event::Failed {
                         attempt,
                         failure: Failure::Service,
-                        message: "No authenticated session is ready".to_string(),
+                        message: crate::i18n::text().attempt_lost.to_string(),
                     });
                     continue;
                 };

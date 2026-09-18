@@ -105,7 +105,7 @@ const UI_FONT: &str = "Roboto";
 ///
 /// Roboto is LineXinBar's own and is what nearly all of this is set in: it
 /// carries Latin, Latin Extended, Greek and Cyrillic, which covers eight of
-/// the nine languages [`crate::i18n`] is written in. It carries no Devanagari
+/// the ten languages [`crate::i18n`] is written in. It carries no Devanagari
 /// and no Han at all, so the Hindi and Chinese columns would be nothing but
 /// `.notdef` boxes without the two Noto faces beside it.
 ///
@@ -996,18 +996,7 @@ impl Renderer {
                 left: text.rect[0],
                 top: text.rect[1],
                 scale: 1.0,
-                bounds: {
-                    let [x, y, w, h] = match text.clip {
-                        Some(clip) => intersection(text.rect, clip),
-                        None => text.rect,
-                    };
-                    TextBounds {
-                        left: x.floor() as i32,
-                        top: y.floor() as i32,
-                        right: (x + w).ceil() as i32,
-                        bottom: (y + h).ceil() as i32,
-                    }
-                },
+                bounds: scissor(text),
                 default_color: TextColor::rgba(
                     (text.color[0] * 255.0) as u8,
                     (text.color[1] * 255.0) as u8,
@@ -1398,7 +1387,7 @@ fn rasterise_svg(data: &[u8], size: u32) -> Option<Vec<u8>> {
 /// Three bindings rather than the two [`texture_layout`] makes, because the
 /// wallpaper is one function and the vendored copy of it has to compile against
 /// everything the shell's copy reads. See `src/shaders.wgsl`, and
-/// `vendor/line-xinbar/ORIGIN.md`, which is the contract that makes this the
+/// `vendor/linexinbar/ORIGIN.md`, which is the contract that makes this the
 /// right trade: a login screen carrying two bindings it never samples is worth a
 /// great deal less than the two copies of that function drifting apart.
 fn scenery_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
@@ -1574,6 +1563,41 @@ pub fn intersection([ax, ay, aw, ah]: [f32; 4], [bx, by, bw, bh]: [f32; 4]) -> [
     [x, y, (ax + aw).min(bx + bw) - x, (ay + ah).min(by + bh) - y]
 }
 
+/// What a run is cut to on its way to the display: across, and never down.
+///
+/// A run's rectangle is where it is *laid out*, not what is left of it. The
+/// boxes [`crate::ui`] writes in are cut to the writing they hold rather than
+/// to the leading around it — the date under the clock is exactly its own
+/// letters tall — so the ink of a line reaches below its own box wherever the
+/// language has a tail in it: `pt.` on a Polish Friday, `jeu.` on a French
+/// Thursday, `qua` on a Brazilian Wednesday. Cut at the box, the p keeps its
+/// bowl and loses its stem while the letters beside it stand whole, which reads
+/// as a broken face rather than as a box that is too small.
+///
+/// So the scissor is horizontal, which is the only cut this screen ever asks
+/// for: `cut_text_behind` takes away the part of a label a panel stands in
+/// front of, and says the same thing from its own side — vertically a panel
+/// that overlaps a line at all overlaps the whole of it. Down the page there is
+/// nothing left to cut, because a `Buffer` given a height lays out only the
+/// lines that fit inside it and drops the rest: a line that reaches the scissor
+/// at all is one that was meant to be drawn, all of it.
+///
+/// `i32::MIN` and `i32::MAX` are not a trick — `glyphon` clamps the bounds it
+/// is given to the surface it is drawing on before it cuts a single glyph with
+/// them, so they mean the top and bottom of the display.
+fn scissor(text: &Text) -> TextBounds {
+    let [x, _, w, _] = match text.clip {
+        Some(clip) => intersection(text.rect, clip),
+        None => text.rect,
+    };
+    TextBounds {
+        left: x.floor() as i32,
+        top: i32::MIN,
+        right: (x + w).ceil() as i32,
+        bottom: i32::MAX,
+    }
+}
+
 fn glass_batches(quads: &[Quad], limit: usize) -> Vec<Batch> {
     let mut batches = Vec::new();
     let mut start = 0;
@@ -1734,9 +1758,99 @@ pub(crate) mod tests {
         ((widest - text.rect[2]).max(0.0), lines.saturating_sub(room))
     }
 
+    /// The rasterised letters of this greeter, cached the way the renderer
+    /// caches them.
+    ///
+    /// Reading ink rather than metrics is the whole point of it: a face's
+    /// ascent and descent are a promise about the letters, and the thing being
+    /// asked here is where a particular letter of a particular word actually
+    /// lands — which is what a scissor cuts.
+    fn shipped_letters() -> std::sync::MutexGuard<'static, SwashCache> {
+        static LETTERS: std::sync::OnceLock<std::sync::Mutex<SwashCache>> =
+            std::sync::OnceLock::new();
+        LETTERS
+            .get_or_init(|| std::sync::Mutex::new(SwashCache::new()))
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+    }
+
+    /// The band of the surface a run puts ink on: its highest pixel and its
+    /// lowest, in the same pixels as `rect`.
+    ///
+    /// Laid out and placed exactly as [`Renderer::prepare_text`] and `glyphon`
+    /// place it — the same faces, the same metrics, the same box, and then the
+    /// same arithmetic on each glyph: the line's baseline, the glyph's own
+    /// offset from it, and the bitmap swash rasterised. `None` where the run
+    /// drew nothing at all, which a run of spaces does.
+    pub(crate) fn ink(text: &Text) -> Option<(f32, f32)> {
+        let mut fonts = shipped_fonts();
+        let fonts = &mut *fonts;
+        let mut letters = shipped_letters();
+        let mut buffer = TextBuffer::new(fonts, Metrics::new(text.size, text.size * 1.25));
+        buffer.set_size(Some(text.rect[2]), Some(text.rect[3]));
+        let attrs = Attrs::new()
+            .family(Family::Name(UI_FONT))
+            .weight(if text.bold {
+                Weight::BOLD
+            } else {
+                Weight::NORMAL
+            });
+        buffer.set_text(&text.content, &attrs, Shaping::Advanced, None);
+        let align = match text.align {
+            TextAlign::Left => None,
+            TextAlign::Center => Some(glyphon::cosmic_text::Align::Center),
+            TextAlign::Right => Some(glyphon::cosmic_text::Align::Right),
+        };
+        for line in &mut buffer.lines {
+            line.set_align(align);
+        }
+        buffer.shape_until_scroll(fonts, false);
+        let mut band: Option<(f32, f32)> = None;
+        for run in buffer.layout_runs() {
+            for glyph in run.glyphs {
+                let placed = glyph.physical((text.rect[0], text.rect[1]), 1.0);
+                let Some((top, height)) = letters
+                    .get_image(fonts, placed.cache_key)
+                    .as_ref()
+                    .map(|image| (image.placement.top, image.placement.height))
+                    .filter(|(_, height)| *height > 0)
+                else {
+                    continue;
+                };
+                let top = (run.line_y.round() as i32 + placed.y - top) as f32;
+                let bottom = top + height as f32;
+                band = Some(match band {
+                    Some((highest, lowest)) => (highest.min(top), lowest.max(bottom)),
+                    None => (top, bottom),
+                });
+            }
+        }
+        band
+    }
+
+    /// How much of a run a rectangle would take off it, above and below.
+    ///
+    /// Given [`scissor`]'s own answer this is the cut the display makes, and
+    /// both halves of it are supposed to be nothing. Given the run's own box
+    /// instead it says what that box holds, which is the reason the two are
+    /// not the same rectangle.
+    pub(crate) fn cut_by(text: &Text, top: f32, bottom: f32) -> (f32, f32) {
+        let Some((highest, lowest)) = ink(text) else {
+            return (0.0, 0.0);
+        };
+        ((top - highest).max(0.0), (lowest - bottom).max(0.0))
+    }
+
+    /// What the display cuts off a run: the scissor it is actually drawn
+    /// through, against the ink it actually puts down.
+    pub(crate) fn cut(text: &Text) -> (f32, f32) {
+        let bounds = scissor(text);
+        cut_by(text, bounds.top as f32, bounds.bottom as f32)
+    }
+
     /// Every word this greeter ships, drawn by a face this greeter ships.
     ///
-    /// This is the check that makes nine languages real rather than nine
+    /// This is the check that makes ten languages real rather than ten
     /// catalogues. Roboto has no Devanagari and no Han in it, so before the
     /// two Noto faces were bundled every sentence of the Hindi and Chinese
     /// columns rasterised to a row of empty boxes — and nothing else in the

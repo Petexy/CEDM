@@ -139,6 +139,17 @@ pub struct Look {
     /// rather than becoming a silent statement about a setting it never made.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
+    /// Which of the two clocks the account writes a time on — `24-hour` or
+    /// `12-hour`, canonical or not, with [`Look::clock`] answering that.
+    ///
+    /// Carried for the accent's reason: the hour on the right of this screen
+    /// is the shell's own clock in the shell's own material, and a greeter
+    /// that showed `20:38` in front of a console set to the twelve-hour clock
+    /// would be the one screen on the machine ignoring the setting. A look
+    /// that says nothing — every one written before the shell had the row —
+    /// leaves the account's language to answer.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub clock: Option<String>,
     /// Which arrangement the account's keyboards are set to, as the one key
     /// `shell.toml` writes both halves of that answer in — `pl (qwertz)`, or a
     /// bare layout where there is no variant.
@@ -254,6 +265,16 @@ impl Look {
     /// The palette this look asks for, if the shell offers one by that name.
     pub fn accent(&self) -> Option<&'static str> {
         accent::canonical(self.accent.as_deref()?)
+    }
+
+    /// Which clock it writes a time on. A look that says nothing, or names a
+    /// clock this build has not got, leaves the language to answer — which is
+    /// [`crate::clock::Clock::FromLanguage`], the default.
+    pub fn clock(&self) -> crate::clock::Clock {
+        self.clock
+            .as_deref()
+            .and_then(crate::clock::Clock::parse)
+            .unwrap_or_default()
     }
 
     /// The material it asks one half of the screen to be drawn in, if this
@@ -1064,6 +1085,7 @@ mod tests {
     /// [`modes_and_connector_names_are_the_shapes_a_compositor_uses`].
     const SHELL: &str = r#"
 accent = "Red"
+clock = "12-hour"
 theme-wallpaper = "Simple"
 hdr = false
 hdr-sdr-brightness = 200
@@ -1095,6 +1117,7 @@ Music = "modified-newest-first"
         let home = home_with(SHELL, None);
         let look = Look::read(&home, None);
         assert_eq!(look.accent(), Some("Red"));
+        assert_eq!(look.clock(), crate::clock::Clock::TwelveHour);
         assert_eq!(
             look.theme(crate::visual::theme::Part::Wallpaper),
             Some("Simple")
@@ -1114,6 +1137,44 @@ Music = "modified-newest-first"
         // Everything else in that file is the shell's business and none of the
         // greeter's: sound, sorting, and whatever is added next.
         assert_eq!(look.display.len(), 2);
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    /// The clock survives being published and read back, and a file that says
+    /// nothing about it leaves the account's language to answer.
+    ///
+    /// The second half is what every look written before the shell had the row
+    /// looks like, which is every look on every machine today — so it has to
+    /// be the one that changes nothing.
+    #[test]
+    fn the_clock_is_carried_and_a_look_that_says_nothing_leaves_it_to_the_language() {
+        let home = home_with(SHELL, None);
+        let look = Look::read(&home, None);
+        assert_eq!(look.clock(), crate::clock::Clock::TwelveHour);
+
+        let published = toml::to_string(&look).expect("a look is written as TOML");
+        assert!(published.contains("clock = \"12-hour\""), "{published}");
+        let back: Look = toml::from_str(&published).expect("and read back");
+        assert_eq!(back.clock(), crate::clock::Clock::TwelveHour);
+
+        assert_eq!(
+            Look::default().clock(),
+            crate::clock::Clock::FromLanguage,
+            "a look with nothing in it names no clock"
+        );
+        // And neither does one naming a clock this build has not got, which is
+        // the same answer a mistyped display mode gets.
+        let odd = Look {
+            clock: Some("sundial".into()),
+            ..Look::default()
+        };
+        assert_eq!(odd.clock(), crate::clock::Clock::FromLanguage);
+        assert!(
+            !toml::to_string(&Look::default())
+                .expect("a look is written as TOML")
+                .contains("clock"),
+            "a look that says nothing writes nothing"
+        );
         fs::remove_dir_all(home).unwrap();
     }
 

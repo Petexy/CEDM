@@ -11,7 +11,7 @@
 //! the fonts and the glyphs, for the same reason those are: a login screen runs
 //! before any desktop does, and there may be no theme of sounds on the machine
 //! to borrow one from. They are that project's clips deliberately — see
-//! `vendor/line-xinbar/ORIGIN.md` — so that signing in and using the shell that
+//! `vendor/linexinbar/ORIGIN.md` — so that signing in and using the shell that
 //! follows are one instrument rather than two.
 //!
 //! Three of them answer a control the user pressed:

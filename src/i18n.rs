@@ -48,7 +48,24 @@ use std::sync::atomic::{AtomicU8, Ordering};
 /// was never written. Anything else on the machine falls back to English.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Language {
+    /// English as this greeter is written in it, and the language everything
+    /// unrecognised falls back to.
     English,
+    /// English as America writes it, which on **this** screen is the same
+    /// English.
+    ///
+    /// The two differ over the order of a date and a handful of spellings, and
+    /// the login screen writes neither: its date line is a weekday and a day
+    /// of the month — `Mon 17` — with no month name in it, and no word on the
+    /// screen is one of the handful. So this reads [`ENGLISH`], and a
+    /// catalogue of its own would be a copy of that file with nothing changed
+    /// in it, which is the one thing a translation must never be.
+    ///
+    /// It is a language of its own all the same, because two things about a
+    /// machine really do turn on it: which of the two clocks a time is written
+    /// on where nobody has chosen ([`crate::clock::Clock::FromLanguage`]), and
+    /// which `Name[…]` a session's desktop entry is read under.
+    AmericanEnglish,
     French,
     German,
     Hindi,
@@ -63,8 +80,9 @@ pub enum Language {
 }
 
 /// Every language, in the order this file writes them.
-pub const ALL: [Language; 9] = [
+pub const ALL: [Language; 10] = [
     Language::English,
+    Language::AmericanEnglish,
     Language::French,
     Language::German,
     Language::Hindi,
@@ -116,7 +134,8 @@ impl Language {
     /// The tag this language is named by, in configuration and in the journal.
     pub const fn tag(self) -> &'static str {
         match self {
-            Self::English => "en",
+            Self::English => "en-GB",
+            Self::AmericanEnglish => "en-US",
             Self::French => "fr",
             Self::German => "de",
             Self::Hindi => "hi",
@@ -132,7 +151,8 @@ impl Language {
     /// `hi` is a line somebody has to look up.
     pub const fn endonym(self) -> &'static str {
         match self {
-            Self::English => "English",
+            Self::English => "English (UK)",
+            Self::AmericanEnglish => "English (US)",
             Self::French => "français",
             Self::German => "Deutsch",
             Self::Hindi => "हिन्दी",
@@ -154,7 +174,8 @@ impl Language {
     /// written for the country wins over one written for the language.
     pub const fn desktop_keys(self) -> &'static [&'static str] {
         match self {
-            Self::English => &["en"],
+            Self::English => &["en_GB", "en"],
+            Self::AmericanEnglish => &["en_US", "en"],
             Self::French => &["fr"],
             Self::German => &["de"],
             Self::Hindi => &["hi"],
@@ -172,11 +193,17 @@ impl Language {
     /// Takes what a locale name actually looks like on a machine rather than
     /// what the specification says: `pt_BR.UTF-8`, `zh_CN.utf8`, `en_GB@euro`,
     /// the BCP 47 `pt-BR` that a session manager may have exported instead, and
-    /// a bare `de`. The country is read only where two catalogues could answer
-    /// to one language, which here is never — Brazilian Portuguese is the
-    /// Portuguese that was written, and Simplified Chinese is the Chinese that
-    /// was written, and both are a better answer for a reader of the other
-    /// variant than English is.
+    /// a bare `de`.
+    ///
+    /// The country is read **first**, and then the language on its own. That
+    /// order matters for one pair and settles the rest: `en_US` is American
+    /// English and every other English — `en_GB`, `en_AU`, a bare `en` — is
+    /// the English this greeter is written in. It changes nothing for
+    /// Portuguese or Chinese, which is the point: Brazilian Portuguese is the
+    /// Portuguese that was written and Simplified Chinese is the Chinese that
+    /// was written, so `pt_PT` and `zh_TW` find no country of their own in the
+    /// first pass and land on those in the second, which is a better answer
+    /// for a reader of the other variant than English is.
     ///
     /// `C` and `POSIX` are `None`, not English: they say that no language has
     /// been chosen, and something further down the list may know which one was.
@@ -195,17 +222,38 @@ impl Language {
         if head.is_empty() || head.eq_ignore_ascii_case("C") || head.eq_ignore_ascii_case("POSIX") {
             return None;
         }
-        ALL.into_iter().find(|language| {
-            let tag = language.tag();
-            let tag = tag.split('-').next().unwrap_or(tag);
-            head.eq_ignore_ascii_case(tag)
-        })
+        let country = locale
+            .split(['.', '@'])
+            .next()
+            .unwrap_or_default()
+            .split(['_', '-'])
+            .nth(1)
+            .unwrap_or_default();
+        ALL.into_iter()
+            .find(|language| {
+                language
+                    .tag()
+                    .split_once('-')
+                    .is_some_and(|(base, theirs)| {
+                        head.eq_ignore_ascii_case(base) && country.eq_ignore_ascii_case(theirs)
+                    })
+            })
+            .or_else(|| {
+                ALL.into_iter().find(|language| {
+                    let tag = language.tag();
+                    let tag = tag.split('-').next().unwrap_or(tag);
+                    head.eq_ignore_ascii_case(tag)
+                })
+            })
     }
 
     /// Everything this language says.
     pub const fn strings(self) -> &'static Strings {
         match self {
             Self::English => &ENGLISH,
+            // Deliberately the same file, and the one place in this table
+            // where two languages share one — see [`Language::AmericanEnglish`].
+            Self::AmericanEnglish => &ENGLISH,
             Self::French => &FRENCH,
             Self::German => &GERMAN,
             Self::Hindi => &HINDI,
@@ -217,32 +265,14 @@ impl Language {
         }
     }
 
-    const fn code(self) -> u8 {
-        match self {
-            Self::English => 0,
-            Self::French => 1,
-            Self::German => 2,
-            Self::Hindi => 3,
-            Self::Polish => 4,
-            Self::Portuguese => 5,
-            Self::Russian => 6,
-            Self::Spanish => 7,
-            Self::Chinese => 8,
-        }
+    fn code(self) -> u8 {
+        ALL.iter()
+            .position(|language| *language == self)
+            .expect("registered language") as u8
     }
 
-    const fn from_code(code: u8) -> Self {
-        match code {
-            1 => Self::French,
-            2 => Self::German,
-            3 => Self::Hindi,
-            4 => Self::Polish,
-            5 => Self::Portuguese,
-            6 => Self::Russian,
-            7 => Self::Spanish,
-            8 => Self::Chinese,
-            _ => Self::English,
-        }
+    fn from_code(code: u8) -> Self {
+        ALL.get(usize::from(code)).copied().unwrap_or(Self::English)
     }
 }
 
@@ -419,7 +449,7 @@ pub fn text() -> &'static Strings {
 /// Run `body` with the screen speaking `language`, and put it back afterwards.
 ///
 /// The answer is kept to the calling thread — see [`SPOKEN`] — so a sweep
-/// through all nine languages is invisible to every other test running beside
+/// through all ten languages is invisible to every other test running beside
 /// it. It was a lock and the process-wide language once, and a lock is the
 /// wrong shape for this: it stops two tests *writing* at the same time and does
 /// nothing about the ones reading, which is every test that draws a screen with
@@ -1258,7 +1288,11 @@ mod tests {
     fn no_catalogue_was_left_in_english() {
         let english = Language::English.strings();
         for language in ALL {
-            if language == Language::English {
+            // The two Englishes are one catalogue on purpose — this screen
+            // writes neither a month nor one of the handful of words the two
+            // spell differently, so there is nothing for a second file to
+            // hold. See [`Language::AmericanEnglish`].
+            if matches!(language, Language::English | Language::AmericanEnglish) {
                 continue;
             }
             let strings = language.strings();
@@ -1341,6 +1375,22 @@ mod tests {
 
     /// Desktop entries are keyed by POSIX locale names, and the country half
     /// of one is not optional where it is the country that was translated.
+    #[test]
+    fn registry_roundtrips_and_keeps_english_and_polish() {
+        assert!(ALL.contains(&Language::English));
+        assert!(ALL.contains(&Language::Polish));
+        let mut tags = std::collections::BTreeSet::new();
+        for language in ALL {
+            assert!(tags.insert(language.tag()));
+            assert_eq!(Language::from_code(language.code()), language);
+            assert_eq!(Language::from_locale(language.tag()), Some(language));
+            assert!(!language.endonym().is_empty());
+        }
+        assert_eq!(Language::from_code(u8::MAX), Language::English);
+        assert_eq!(Language::from_locale("pl_PL.UTF-8"), Some(Language::Polish));
+        assert_eq!(Language::Polish.strings().sign_in, "Zaloguj się");
+    }
+
     #[test]
     fn a_desktop_entry_is_looked_up_by_the_key_it_actually_carries() {
         assert_eq!(Language::Portuguese.desktop_keys(), ["pt_BR", "pt"]);

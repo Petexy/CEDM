@@ -310,6 +310,12 @@ pub struct View<'a> {
     /// time it is. The greeting comes from the same reading, so a display with
     /// no clock also greets nobody by the hour.
     pub now: Option<crate::clock::Now>,
+    /// Which clock that time is written on: the setting of the account the
+    /// selection is standing on, out of the look it published. Beside `now`
+    /// rather than inside it because a reading of the machine's clock is not
+    /// a statement about how anybody wants it written — see
+    /// [`crate::clock::Clock`].
+    pub clock: crate::clock::Clock,
     /// The open session menu, if one is open.
     pub session_menu: Option<Menu>,
 }
@@ -1081,7 +1087,7 @@ fn build_column(output: &mut Output, layout: Layout, metrics: Metrics, fade: f32
 /// seconds, and a clock that changed material at the handover would be the seam
 /// this project spends most of its length avoiding. See [`visual::letters`].
 ///
-/// The date under it cannot follow and is not meant to. It is *words* — nine
+/// The date under it cannot follow and is not meant to. It is *words* — ten
 /// languages, in Latin, Cyrillic, Devanagari and Han — and a cell per codepoint
 /// is not a text renderer. It stays a text run, in the same colour, which is
 /// what keeps the two lines one object: the tint carries the accent, the
@@ -1098,7 +1104,7 @@ fn build_clock(output: &mut Output, view: &View<'_>, layout: Layout, fade: f32) 
     // that answer is read from.
     clock_time(
         &mut output.scene,
-        &now.time(),
+        &now.time(view.clock),
         layout.clock,
         layout.clock[3] / 1.22,
         palette.text_soft.a(0.97 * fade),
@@ -1138,6 +1144,12 @@ fn clock_time(scene: &mut Scene, time: &str, rect: [f32; 4], size: f32, colour: 
     let middle = rect[1] + (visual::letters::BASELINE - visual::letters::LETTER_MIDDLE) * size;
     let mut pen = rect[0] + (rect[2] - width) * 0.5;
     for letter in run {
+        // The space between the hour and AM or PM moves the pen and draws
+        // nothing; see [`visual::letters::SPACE`].
+        let Some(cell) = letter.cell else {
+            pen += letter.advance * size;
+            continue;
+        };
         // `shaded` is what gives the quad its depth and its light, which is also
         // what says its cell holds a shape rather than a picture — the letters go
         // through the same door the marks do.
@@ -1148,7 +1160,7 @@ fn clock_time(scene: &mut Scene, time: &str, rect: [f32; 4], size: f32, colour: 
                 side,
                 side,
             ],
-            slot: letter.cell,
+            slot: cell,
             color: [colour[0], colour[1], colour[2], 1.0],
             fade: colour[3],
             ..Quad::default()
@@ -2755,6 +2767,7 @@ mod tests {
             carousel_shift: 0.0,
             footer,
             now: crate::clock::Now::read(),
+            clock: crate::clock::Clock::default(),
             session_menu: None,
         }
     }
@@ -2766,7 +2779,7 @@ mod tests {
         build(view, &[Display::whole(width, height)])
     }
 
-    /// Nine languages, and every one of them has to fit where it is written.
+    /// Ten languages, and every one of them has to fit where it is written.
     ///
     /// This is the check that a translation is a translation rather than a
     /// longer sentence in the same box. Nothing here wraps onto the column:
@@ -2882,6 +2895,100 @@ mod tests {
                 }),
             "a sentence too long for the reserved line was not reported as one"
         );
+    }
+
+    /// Ten languages, seven days a week, and not one letter cut in half.
+    ///
+    /// The boxes in [`Layout`] are cut to the writing they hold rather than to
+    /// the leading around it — the date under the clock is exactly its own
+    /// letters tall — so the ink of a line reaches below its own box wherever
+    /// the language has a tail in it, and which language that is depends on the
+    /// day: `pt.` on a Polish Friday, `jeu.` on a French Thursday, `qua` on a
+    /// Brazilian Wednesday. A screen drawn through its own boxes kept the bowl
+    /// of the p and lost its stem, and did it on one day in seven — which is
+    /// how it survived every language being looked at on a Tuesday.
+    ///
+    /// So the clock here is not the one on the wall. Every weekday is composed
+    /// in every language, and each run is measured where it truly lands: shaped
+    /// in the faces this greeter ships, placed the way `glyphon` places it, and
+    /// rasterised, because a scissor cuts ink and not metrics.
+    #[test]
+    fn no_letter_is_cut_off_by_the_box_it_is_written_in() {
+        let users = [user("Alex")];
+        let sessions = [session("LineXinBar")];
+        let board = Board::default();
+        for language in i18n::ALL {
+            i18n::with_language(language, || {
+                let strings = language.strings();
+                let phases = [
+                    Phase::Choose,
+                    Phase::Authenticating {
+                        prompt: strings.password,
+                        secret: true,
+                        input: "",
+                    },
+                    Phase::Error(strings.incorrect_account_or_password),
+                ];
+                for weekday in 0..7 {
+                    for phase in phases {
+                        for (width, height) in [(1280.0, 720.0), (3840.0, 2160.0)] {
+                            let mut view =
+                                view(&users, &sessions, phase, Focus::Prompt, FOOTER.as_slice());
+                            view.now = Some(crate::clock::Now {
+                                weekday,
+                                ..crate::clock::Now::at_hour(9, 41)
+                            });
+                            view.keyboard = Some(&board);
+                            view.keyboard_arrival = 1.0;
+                            let output = one_display(view, width, height);
+                            for text in &output.scene.texts {
+                                let (above, below) = crate::visual::tests::cut(text);
+                                assert!(
+                                    above <= 0.0 && below <= 0.0,
+                                    "{}: {:?} loses {above:.1}px off the top of its letters \
+                                     and {below:.1}px off the bottom of them, at {width}x{height}",
+                                    language.endonym(),
+                                    text.content,
+                                );
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // And the check has teeth, which are the reason the scissor is not the
+        // box: a Polish Friday really does put ink below the rectangle the date
+        // is laid out in, and a measurement that found nothing there would be
+        // agreeing with the bug rather than with the screen.
+        i18n::with_language(i18n::Language::Polish, || {
+            let mut view = view(
+                &users,
+                &sessions,
+                Phase::Choose,
+                Focus::Prompt,
+                FOOTER.as_slice(),
+            );
+            let friday = crate::clock::Now {
+                weekday: 5,
+                ..crate::clock::Now::at_hour(9, 41)
+            };
+            view.now = Some(friday);
+            let output = one_display(view, 1280.0, 720.0);
+            let date = output
+                .scene
+                .texts
+                .iter()
+                .find(|text| text.content == friday.date())
+                .expect("the date is drawn");
+            let (_, below) =
+                crate::visual::tests::cut_by(date, date.rect[1], date.rect[1] + date.rect[3]);
+            assert!(
+                below > 0.5,
+                "{:?} is supposed to hang below its own box and does not",
+                date.content
+            );
+        });
     }
 
     fn hit(output: &Output, target: Target) -> [f32; 4] {
@@ -3191,6 +3298,64 @@ mod tests {
         assert_eq!(&line.color[..3], &tint[..3]);
     }
 
+    /// The widest time either clock can write fits the room it is written in.
+    ///
+    /// `clock_time` *centres* its run rather than clipping it, so a run wider
+    /// than its rectangle does not get cut — it walks left, out of the half of
+    /// the display the column does not cover and into the column itself. The
+    /// twelve-hour clock made this worth checking: `12:42 PM` is three
+    /// characters and a space longer than `19:42`, and it has to fit at every
+    /// size the greeter draws, the tightest of them included.
+    #[test]
+    fn the_widest_time_either_clock_writes_fits_beside_the_column() {
+        let users = [user("Alex")];
+        let sessions = [session("LineXinBar")];
+        // Every hour of the day on both clocks, which is where the widest of
+        // them is: noon and midnight are the twelve-hour clock's two digits.
+        let times: Vec<String> = (0..24)
+            .flat_map(|hour| {
+                let now = crate::clock::Now::at_hour(hour, 42);
+                [
+                    now.time(crate::clock::Clock::TwentyFourHour),
+                    now.time(crate::clock::Clock::TwelveHour),
+                ]
+            })
+            .collect();
+
+        for (width, height) in [
+            (1280.0, 720.0),
+            (1600.0, 900.0),
+            (1920.0, 1080.0),
+            (2560.0, 1440.0),
+            (3840.0, 2160.0),
+        ] {
+            let metrics = Metrics::new(width, height);
+            let layout = Layout::new(
+                metrics,
+                &view(
+                    &users,
+                    &sessions,
+                    Phase::Choose,
+                    Focus::Users,
+                    FOOTER.as_slice(),
+                ),
+            );
+            if !layout.split {
+                continue; // No clock is drawn at all on a display this narrow.
+            }
+            let size = layout.clock[3] / 1.22;
+            for time in &times {
+                let run = visual::letters::run(time).expect("the greeter can write it");
+                let written = run.iter().map(|letter| letter.advance).sum::<f32>() * size;
+                assert!(
+                    written <= layout.clock[2],
+                    "{width}x{height}: {time:?} is {written} wide in a {} rectangle",
+                    layout.clock[2]
+                );
+            }
+        }
+    }
+
     /// The hour stands where the text pipeline had it: centred across the half
     /// of the display the column does not cover, on the same baseline, letter
     /// after letter by the advances the face gives them.
@@ -3453,10 +3618,17 @@ mod tests {
             720.0,
             900.0,
         );
-        let clock = crate::clock::Now::read().expect("local time").time();
+        let clock = crate::clock::Now::read()
+            .expect("local time")
+            .time(crate::clock::Clock::default());
         assert_eq!(
             clock_letters(&wide.scene).len(),
-            clock.chars().count(),
+            // Every character but the space, which moves the pen and draws
+            // nothing — see [`visual::letters::SPACE`].
+            clock
+                .chars()
+                .filter(|c| *c != visual::letters::SPACE)
+                .count(),
             "the wide display draws every letter of the time",
         );
         assert!(

@@ -89,7 +89,7 @@ struct Args {
     /// Show the login screen in this language, whatever the machine is set to.
     ///
     /// A locale name or a language tag: `pl`, `pl_PL.UTF-8` and `pt-BR` are
-    /// all understood. This is for reviewing the nine translations from one
+    /// all understood. This is for reviewing the ten translations from one
     /// desk. The real login screen takes the machine's own language — see
     /// [`cedm::i18n`] — and an administrator who wants to override that says
     /// so in the configuration file rather than on a command line nothing
@@ -587,6 +587,11 @@ struct Application {
     selected_user: usize,
     user_motion: Option<CarouselMotion>,
     user_accents: Vec<String>,
+    /// Which clock each account writes a time on, and the one the selection is
+    /// standing on. Held the way the accents are, and for their reason: the
+    /// screen is the account's, and moving along the carousel moves it.
+    user_clocks: Vec<cedm::clock::Clock>,
+    clock: cedm::clock::Clock,
     /// What each listed account's shell is made of, in the same order.
     user_themes: Vec<Materials>,
     /// The keyboard each listed account types on, in the same order again, as
@@ -707,6 +712,8 @@ impl Application {
             .iter()
             .map(|user| user_accent(&state, user))
             .collect::<Vec<_>>();
+        let user_clocks = users.iter().map(user_clock).collect::<Vec<_>>();
+        let clock = user_clocks.get(selected_user).copied().unwrap_or_default();
         let user_themes = users
             .iter()
             .map(|user| user_theme(&state, user))
@@ -769,6 +776,8 @@ impl Application {
             selected_user,
             user_motion: None,
             user_accents,
+            user_clocks,
+            clock,
             user_themes,
             keyboard: machine_keyboard.clone(),
             user_keyboards,
@@ -951,6 +960,9 @@ impl Application {
             self.selected_session = self.other_session;
             self.accent = cedm::accent::DEFAULT_ACCENT.to_string();
             self.material = Materials::default();
+            // Nobody is named, so there is no account whose setting this could
+            // be: the machine's own language answers, which is the default.
+            self.clock = cedm::clock::Clock::default();
             // Nobody is named, so there is no account whose keyboard this
             // could be: the machine's own, which is what it was before any
             // account was looked at.
@@ -959,6 +971,7 @@ impl Application {
             self.selected_session = self.user_sessions[self.selected_user];
             self.accent = self.user_accents[self.selected_user].clone();
             self.material = self.user_themes[self.selected_user].clone();
+            self.clock = self.user_clocks[self.selected_user];
             self.user_keyboards[self.selected_user].clone()
         };
         visual::theme::preview_accent(&self.accent);
@@ -2228,6 +2241,7 @@ impl Application {
                 carousel_shift: self.carousel_shift(now),
                 footer: &self.footer,
                 now: self.now,
+                clock: self.clock,
                 session_menu: menu,
             },
             displays,
@@ -2892,6 +2906,20 @@ fn user_keyboard(user: &User, machine: &(String, String)) -> (String, String) {
     cedm::accent::read_keyboard_for_home(&user.home)
         .or_else(|| cedm::look::published(&user.name, user.uid).and_then(|look| look.keyboard()))
         .unwrap_or_else(|| machine.clone())
+}
+
+/// Which clock an account writes a time on.
+///
+/// Out of the copy of `shell.toml` that account published on its way into its
+/// last session, which is the one place a greeter can read it from: the
+/// settings themselves are in a home directory this process has no business
+/// reading, and there is nothing in broker state about a clock. An account
+/// with no published look, or one written before the shell had the row, leaves
+/// its language to answer — see [`cedm::clock::Clock::FromLanguage`].
+fn user_clock(user: &User) -> cedm::clock::Clock {
+    cedm::look::published(&user.name, user.uid)
+        .map(|look| look.clock())
+        .unwrap_or_default()
 }
 
 fn user_accent(state: &State, user: &User) -> String {

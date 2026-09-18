@@ -1,6 +1,6 @@
 # LineXinBar shared-surface origin
 
-The following files were copied from LineXinBar (<https://github.com/Petexy/LineXinBar>) at commit `ce7a9a9` and remain under that project's GPL-3.0-only terms:
+The following files were copied from LineXinBar (<https://github.com/Petexy/LineXinBar>) and remain under that project's GPL-3.0-only terms:
 
 | CEDM file | LineXinBar origin |
 | --- | --- |
@@ -12,7 +12,7 @@ The following files were copied from LineXinBar (<https://github.com/Petexy/Line
 | `assets/glyphs/*` | matching `icons/*.svg` files |
 | `assets/sounds/*` | matching `crates/lxb-desktop/src/sounds/*.ogg` files, at commit `0290f37` |
 
-The two Noto faces beside them — `assets/fonts/NotoSansDevanagariUI-{Regular,Bold}.ttf` and `assets/fonts/NotoSansCJKsc-{Regular,Bold}.ttf` — are **not** LineXinBar's. They are subsets of Google's Noto Sans Devanagari UI and Noto Sans CJK SC, cut down to what this login screen draws, and they are here because CEDM says things in nine languages and the shell's Roboto has no Devanagari and no Han in it. They keep their own licence, `assets/fonts/LICENSE-NotoSans.txt` (SIL Open Font License 1.1); neither family declares a Reserved Font Name, so the subsets keep their original names. See "What it says, and in which language" in the README.
+The two Noto faces beside them — `assets/fonts/NotoSansDevanagariUI-{Regular,Bold}.ttf` and `assets/fonts/NotoSansCJKsc-{Regular,Bold}.ttf` — are **not** LineXinBar's. They are subsets of Google's Noto Sans Devanagari UI and Noto Sans CJK SC, cut down to what this login screen draws, and they are here because CEDM says things in ten languages and the shell's Roboto has no Devanagari and no Han in it. They keep their own licence, `assets/fonts/LICENSE-NotoSans.txt` (SIL Open Font License 1.1); neither family declares a Reserved Font Name, so the subsets keep their original names. See "What it says, and in which language" in the README.
 
 `lxb-wallpaper-v2` is the compatibility ABI for the shader, palette uniforms, coordinate system, linear-light colour handling and monotonic scene clock. Bump it in both repositories whenever those pixels or semantics change.
 

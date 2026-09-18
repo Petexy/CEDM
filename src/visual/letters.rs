@@ -13,12 +13,18 @@
 //! shaders.wgsl, which is the shell's own and shades a bead of water out of the
 //! field.
 //!
-//! **Eleven characters, and no more.** `crate::clock::Now::time` is always
-//! `HH:MM` in twenty-four hour form, so the whole alphabet of it is the ten
-//! digits and a colon. The *date* under the clock cannot follow and is not meant
-//! to: it is words, in nine languages, in Latin, Cyrillic, Devanagari and Han —
-//! a cell per codepoint is not a text renderer, and this greeter would need a
-//! thousand of them for Chinese alone.
+//! **Fifteen characters, and no more.** `crate::clock::Now::time` is `20:38` or
+//! `8:38 PM` according to the account's own setting, so the whole alphabet of
+//! it is the ten digits, a colon, a space and the three letters AM and PM are
+//! written with. The last four went in with the twelve-hour clock, on the
+//! argument the shell added the same three on: what they write is the second
+//! half of the *time itself*, and two marks of two letters each is not an
+//! alphabet — nothing else in this greeter may be spelled out of them.
+//!
+//! The *date* under the clock cannot follow and is not meant to: it is words,
+//! in ten languages, in Latin, Cyrillic, Devanagari and Han — a cell per
+//! codepoint is not a text renderer, and this greeter would need a thousand of
+//! them for Chinese alone.
 
 // The measurement is the marks' own: `field` holds the transform, the range it
 // is encoded in and the four it is supersampled by, and it is argued for there.
@@ -60,16 +66,23 @@ const FIELD_SIZE: f32 = (CELL * SDF_SUPERSAMPLE) as f32 / LETTER_BOX;
 /// noise against it; the answer is a ratio either way.
 const ADVANCE_SIZE: f32 = 1000.0;
 
-/// Every character the clock can be written in, in the cell each is measured
-/// into.
+/// Every character the clock is *cut* from, in the cell each is measured into.
 ///
 /// The order is the order of [`super::LETTER_SLOT`]: the ten digits by value,
-/// then the colon.
-pub const SET: [char; 11] = ['0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':'];
+/// then the colon, then the three letters of AM and PM. [`SPACE`] is in the
+/// clock and not in here, because it has an advance and nothing to draw.
+pub const SET: [char; 14] = [
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':', 'A', 'M', 'P',
+];
 
-/// The cell one of them is in, or `None` for a character the clock cannot
-/// contain — which is what stops anything else in this greeter being drawn out
-/// of this alphabet.
+/// The one character of the clock with no cell of its own: it separates the
+/// hour from AM or PM, and a field with no shape in it would fail the same
+/// measurement an empty glyph does.
+pub const SPACE: char = ' ';
+
+/// The cell one of them is in, or `None` for a character with no cell —
+/// [`SPACE`], and every character the clock cannot contain, which is what stops
+/// anything else in this greeter being drawn out of this alphabet.
 pub fn slot(letter: char) -> Option<u32> {
     SET.iter()
         .position(|c| *c == letter)
@@ -81,7 +94,8 @@ pub fn slot(letter: char) -> Option<u32> {
 /// the type's size.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Letter {
-    pub cell: u32,
+    /// `None` for [`SPACE`], which moves the pen and draws nothing.
+    pub cell: Option<u32>,
     pub advance: f32,
 }
 
@@ -96,7 +110,10 @@ pub fn run(time: &str) -> Option<Vec<Letter>> {
     time.chars()
         .map(|letter| {
             Some(Letter {
-                cell: slot(letter)?,
+                cell: match letter {
+                    SPACE => None,
+                    letter => Some(slot(letter)?),
+                },
                 advance: *advances().get(&letter)?,
             })
         })
@@ -119,7 +136,7 @@ fn advances() -> &'static std::collections::HashMap<char, f32> {
     ADVANCES.get_or_init(|| {
         let mut fonts = bold_face();
         let mut out = std::collections::HashMap::new();
-        for letter in SET {
+        for letter in SET.into_iter().chain(std::iter::once(SPACE)) {
             match shaped(&mut fonts, letter, ADVANCE_SIZE) {
                 Some(glyph) => {
                     out.insert(letter, glyph.w / ADVANCE_SIZE);
@@ -175,12 +192,12 @@ fn shaped(
 /// write at [`slot`]. Colour is left white throughout: nothing samples it, and
 /// white is what a multiply expects if anything ever does.
 ///
-/// Eleven exact distance transforms over a 1024-square grid, which is the whole
-/// cost of this file and the reason they are taken on threads rather than one
-/// after another while the login screen has nothing on it yet. In chunks rather
-/// than all at once, because each transform holds three grids of its own, and
-/// eleven of those at the same time is a hundred megabytes for a login screen to
-/// be carrying while it draws its first frame.
+/// Fourteen exact distance transforms over a 1024-square grid, which is the
+/// whole cost of this file and the reason they are taken on threads rather than
+/// one after another while the login screen has nothing on it yet. In chunks
+/// rather than all at once, because each transform holds three grids of its
+/// own, and fourteen of those at the same time is well over a hundred megabytes
+/// for a login screen to be carrying while it draws its first frame.
 pub fn fields() -> Vec<(u32, Vec<u8>)> {
     let mut fonts = bold_face();
     let mut swash = glyphon::SwashCache::new();

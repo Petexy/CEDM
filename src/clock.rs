@@ -20,6 +20,74 @@
 use crate::i18n;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+/// Which of the two clocks a time of day is written on.
+///
+/// The shell's own setting — Settings > System > Clock — which reaches this
+/// screen the way the accent and the material do: through the copy of
+/// `shell.toml` the account published on its way into its last session. See
+/// [`crate::look::Look::clock`].
+///
+/// AM and PM are the same two marks in every language this greeter speaks, so
+/// they are not in [`crate::i18n::Strings`]. They are also the reason the
+/// clock's alphabet has letters in it at all; see
+/// [`crate::visual::letters::SET`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum Clock {
+    /// Nobody has chosen, so the **language** answers: an account reading
+    /// English as America writes it gets `8:38 PM`, and every other account
+    /// gets `20:38`.
+    ///
+    /// The default, and what every published look written before the shell had
+    /// this setting says by saying nothing — so a machine that is not set to
+    /// English (US) goes on showing exactly the clock it always showed.
+    #[default]
+    FromLanguage,
+    TwentyFourHour,
+    TwelveHour,
+}
+
+impl Clock {
+    /// What `shell.toml` writes, and what a published look carries.
+    pub const fn key(self) -> &'static str {
+        match self {
+            Self::FromLanguage => "language",
+            Self::TwentyFourHour => "24-hour",
+            Self::TwelveHour => "12-hour",
+        }
+    }
+
+    /// Read one back. `None` for a word this build has no clock for, which the
+    /// caller reads as nothing having been chosen: the file is one the user is
+    /// entitled to open, and an unknown word is not a reason to invent a clock.
+    pub fn parse(value: &str) -> Option<Self> {
+        match value.trim() {
+            "language" => Some(Self::FromLanguage),
+            "24-hour" => Some(Self::TwentyFourHour),
+            "12-hour" => Some(Self::TwelveHour),
+            _ => None,
+        }
+    }
+
+    /// Whether a time is written with AM or PM after it.
+    ///
+    /// Where nobody has chosen, the account's **language** answers, and two of
+    /// the ten read the twelve-hour clock: English (US) and हिन्दी — the clock
+    /// America and India both read. That is CLDR's preferred hour cycle for
+    /// each, and the same pair the shell and lxb-toolkit answer for, so a
+    /// machine nobody has set writes the same time on the login screen, on the
+    /// start screen and in an application.
+    pub fn twelve_hour(self) -> bool {
+        match self {
+            Self::TwelveHour => true,
+            Self::TwentyFourHour => false,
+            Self::FromLanguage => matches!(
+                i18n::language(),
+                i18n::Language::AmericanEnglish | i18n::Language::Hindi
+            ),
+        }
+    }
+}
+
 /// A civil time, already broken down and bounded.
 ///
 /// The first four fields are the clock the greeter shows. The last three are
@@ -116,10 +184,45 @@ impl Now {
         })
     }
 
-    /// `20:38`. Twenty-four hour, which is what the design shows and what
-    /// needs no locale to be read correctly.
-    pub fn time(&self) -> String {
-        format!("{:02}:{:02}", self.hour, self.minute)
+    /// One hour of an ordinary day, for a test that wants every hour of it
+    /// rather than the one it happens to be.
+    #[cfg(test)]
+    pub fn at_hour(hour: u8, minute: u8) -> Self {
+        Self {
+            hour,
+            minute,
+            weekday: 1,
+            day: 17,
+            yday: 16,
+            year: 2026,
+            offset: 0,
+        }
+    }
+
+    /// `20:38`, or `8:38 PM` — whichever clock the account being signed in to
+    /// keeps.
+    ///
+    /// It was the twenty-four hour clock whatever the machine said, on the
+    /// argument that it needs no locale to be read correctly. That argument
+    /// was about a *locale*, which nobody chose; it does not survive a row
+    /// somebody pressed in Settings > System > Clock, and a login screen that
+    /// went on writing 20:38 in front of a console set to the twelve-hour
+    /// clock would be the one screen on the machine ignoring the setting.
+    ///
+    /// The hour keeps its leading zero on the twenty-four hour clock and loses
+    /// it on the twelve, which is what each is written with.
+    pub fn time(&self, clock: Clock) -> String {
+        if !clock.twelve_hour() {
+            return format!("{:02}:{:02}", self.hour, self.minute);
+        }
+        // Midnight is twelve, not zero, and so is noon: the hour rolls to
+        // twelve at each end rather than counting from it.
+        let half = if self.hour < 12 { "AM" } else { "PM" };
+        let hour = match self.hour % 12 {
+            0 => 12,
+            other => other,
+        };
+        format!("{hour}:{:02} {half}", self.minute)
     }
 
     /// `Mon 17`, in the language the machine is set to.
@@ -173,7 +276,7 @@ mod tests {
     #[test]
     fn renders_the_two_fields_the_panel_shows() {
         let now = Now::from_tm(&tm(20, 38, 1, 17)).expect("valid time");
-        assert_eq!(now.time(), "20:38");
+        assert_eq!(now.time(Clock::TwentyFourHour), "20:38");
         i18n::with_language(i18n::Language::English, || {
             assert_eq!(now.date(), "Mon 17");
         });
@@ -182,10 +285,88 @@ mod tests {
     #[test]
     fn pads_to_a_stable_width_so_the_clock_does_not_jump() {
         let now = Now::from_tm(&tm(9, 5, 0, 1)).expect("valid time");
-        assert_eq!(now.time(), "09:05");
+        assert_eq!(now.time(Clock::TwentyFourHour), "09:05");
         i18n::with_language(i18n::Language::English, || {
             assert_eq!(now.date(), "Sun 1");
         });
+    }
+
+    /// The other clock, and the language that answers for an account nobody
+    /// has asked.
+    ///
+    /// The hour loses its leading zero on the twelve-hour clock, which is what
+    /// that clock is written with — `8:38 PM`, never `08:38 PM` — so the run
+    /// is one character narrower and one wider than the other's by turns. The
+    /// clock is centred in its rectangle, so nothing jumps.
+    #[test]
+    fn the_twelve_hour_clock_rolls_to_twelve_at_each_end() {
+        let at = |hour, minute| {
+            Now::from_tm(&tm(hour, minute, 1, 17))
+                .expect("valid time")
+                .time(Clock::TwelveHour)
+        };
+        assert_eq!(at(20, 38), "8:38 PM");
+        assert_eq!(at(0, 5), "12:05 AM", "midnight is twelve");
+        assert_eq!(at(12, 0), "12:00 PM", "and so is noon");
+        assert_eq!(at(11, 59), "11:59 AM");
+        assert_eq!(at(23, 59), "11:59 PM");
+
+        // Nothing chosen: the account's own language answers, and English (US)
+        // and Hindi are the two that write AM and PM.
+        let now = Now::from_tm(&tm(20, 38, 1, 17)).expect("valid time");
+        for language in [i18n::Language::AmericanEnglish, i18n::Language::Hindi] {
+            i18n::with_language(language, || {
+                assert!(Clock::FromLanguage.twelve_hour());
+                assert_eq!(now.time(Clock::FromLanguage), "8:38 PM");
+            });
+        }
+        // And the other eight read the twenty-four hour clock.
+        for language in i18n::ALL.into_iter().filter(|language| {
+            !matches!(
+                language,
+                i18n::Language::AmericanEnglish | i18n::Language::Hindi
+            )
+        }) {
+            i18n::with_language(language, || {
+                assert!(!Clock::FromLanguage.twelve_hour());
+                assert_eq!(now.time(Clock::FromLanguage), "20:38");
+            });
+        }
+
+        // And a look that names one outranks the language in both directions.
+        i18n::with_language(i18n::Language::AmericanEnglish, || {
+            assert_eq!(now.time(Clock::TwentyFourHour), "20:38");
+        });
+        assert_eq!(Clock::parse("12-hour"), Some(Clock::TwelveHour));
+        assert_eq!(Clock::parse("sundial"), None);
+        for clock in [
+            Clock::FromLanguage,
+            Clock::TwentyFourHour,
+            Clock::TwelveHour,
+        ] {
+            assert_eq!(Clock::parse(clock.key()), Some(clock));
+        }
+        assert_eq!(Clock::default(), Clock::FromLanguage);
+    }
+
+    /// Every character either clock can write is one the greeter's own
+    /// alphabet has a cell for — or the whole clock is drawn as nothing.
+    ///
+    /// This is the check that caught the twelve-hour clock: the alphabet was
+    /// the ten digits and a colon, and `8:38 PM` has four characters outside
+    /// it. See [`crate::visual::letters::SET`].
+    #[test]
+    fn every_clock_is_written_out_of_the_alphabet_the_greeter_ships() {
+        for hour in 0..24 {
+            for clock in [Clock::TwentyFourHour, Clock::TwelveHour] {
+                let now = Now::from_tm(&tm(hour, 5, 1, 17)).expect("valid time");
+                let written = now.time(clock);
+                assert!(
+                    crate::visual::letters::run(&written).is_some(),
+                    "the greeter cannot draw {written:?}"
+                );
+            }
+        }
     }
 
     /// The second line is a *pattern*, not a weekday with a number stuck on
@@ -283,6 +464,6 @@ mod tests {
     fn the_machines_own_clock_can_be_read() {
         let now = Now::read().expect("local time");
         assert!(now.hour < 24 && now.minute < 60);
-        assert_eq!(now.time().len(), 5);
+        assert_eq!(now.time(Clock::TwentyFourHour).len(), 5);
     }
 }
