@@ -55,6 +55,15 @@ struct Args {
     /// Start preview mode with the session menu open, so it can be reviewed.
     #[arg(long, requires = "preview", conflicts_with = "preview_auth")]
     preview_menu: bool,
+    /// Show made-up accounts instead of this machine's. Implies `--preview`.
+    ///
+    /// A picture of a login screen is otherwise a picture of whoever took it:
+    /// the carousel draws the login names out of `/etc/passwd` and the face
+    /// `accounts-daemon` published for each one. Every screenshot in this
+    /// repository's documentation is taken with this, and nothing of the
+    /// machine's accounts is read while it is set.
+    #[arg(long)]
+    demo: bool,
     /// Print discovered sessions and exit.
     #[arg(long)]
     list_sessions: bool,
@@ -267,6 +276,13 @@ fn main() -> anyhow::Result<()> {
         args.preview = true;
         args.windowed = true;
     }
+    // Neither may a screen of made-up accounts: `alex` is not a login on this
+    // machine, so every one of them would be a PAM attempt that cannot succeed
+    // — and a greeter that sent one would be telling greetd that somebody is
+    // signing in when nobody is.
+    if args.demo {
+        args.preview = true;
+    }
     // A size is a request for a window of that size, and a fullscreen surface
     // is whatever the display is.
     if args.size.is_some() || !args.displays.is_empty() {
@@ -347,7 +363,14 @@ fn main() -> anyhow::Result<()> {
     // A machine backed only by LDAP, NIS, or another PAM directory can have
     // no enumerable local profile and still be perfectly login-capable. The
     // permanent "Other account" profile handles that case.
-    let users = cedm::users::discover();
+    // `--demo` never reads the machine's accounts at all, rather than reading
+    // them and drawing something else: a picture of a login screen must not be
+    // a picture of whoever took it.
+    let users = if args.demo {
+        cedm::users::demo()
+    } else {
+        cedm::users::discover()
+    };
 
     let event_loop = EventLoop::new()?;
     event_loop.set_control_flow(ControlFlow::Wait);
@@ -3071,6 +3094,7 @@ mod tests {
                 // [`cedm::sound::Spent`].
                 no_sound: true,
                 preview_menu: false,
+                demo: false,
                 shot: None,
                 size: None,
                 displays: Vec::new(),

@@ -194,8 +194,72 @@ fn is_login_shell(shell: &Path) -> bool {
     )
 }
 
+/// Three accounts that are nobody's, for a picture of the login screen.
+///
+/// `--demo` exists for one reason: a screenshot of this greeter is otherwise a
+/// screenshot of whoever took it. [`discover`] reads `/etc/passwd`, which on
+/// the machine a picture is taken from holds a real person's login name, and
+/// [`crate::faces`] then puts that person's photograph in the middle of it.
+/// Neither belongs in a README.
+///
+/// So these are made up, and they are made up rather than read out of a file
+/// somebody has to prepare: the one thing a demo may not do is need setting up
+/// before it works. Everything above this point is the ordinary code path —
+/// the same carousel, the same dots, the same accent lookup, which finds
+/// nothing published for names like these and draws the default palette.
+///
+/// **None of them has an avatar**, and that is honest rather than a shortcut.
+/// A greeter only ever draws a picture the system published under
+/// `/var/lib/AccountsService/icons`; inventing a face here would mean shipping
+/// a photograph of a person who does not exist, in the one place on the screen
+/// where a real machine shows a real one. An account with no published picture
+/// is drawn as its initial, which is exactly what these are.
+pub fn demo() -> Vec<User> {
+    ["alex", "sam", "jordan"]
+        .iter()
+        .enumerate()
+        .map(|(index, name)| User {
+            name: (*name).to_string(),
+            display_name: (*name).to_string(),
+            uid: 1000 + index as u32,
+            home: PathBuf::from(format!("/home/{name}")),
+            shell: PathBuf::from("/bin/sh"),
+            avatar: None,
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
+    /// The made-up accounts are made up, and none of them carries a face.
+    ///
+    /// The whole point of `--demo` is that a picture of the login screen is
+    /// nobody's: a name out of this machine's `/etc/passwd`, or a photograph
+    /// `accounts-daemon` published for a real person, is the one thing it must
+    /// not be able to draw.
+    #[test]
+    fn the_demo_accounts_are_nobodys() {
+        let demo = demo();
+        assert!(demo.len() > 1, "a carousel wants something to move between");
+        assert!(
+            demo.iter().all(|user| user.avatar.is_none()),
+            "a made-up account must not wear a face"
+        );
+        let real = discover();
+        for user in &demo {
+            assert!(
+                validate_login_name(&user.name).is_ok(),
+                "{} is not a name this greeter would accept",
+                user.name
+            );
+            assert!(
+                !real.iter().any(|it| it.name == user.name),
+                "{} is an account on this machine, so the demo would show a real one",
+                user.name
+            );
+        }
+    }
+
     use super::*;
 
     #[test]
