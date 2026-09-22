@@ -10,6 +10,7 @@
   libglvnd,
   vulkan-loader,
   systemd,
+  alsa-lib,
   xorg,
   dbus,
   lxb-compositor,
@@ -78,6 +79,12 @@ rustPlatform.buildRustPackage {
     libglvnd
     vulkan-loader
     systemd
+    # The four sounds the login screen answers a button with. `rodio` is built
+    # with `playback`, which reaches ALSA through `cpal` and `alsa-sys`, and
+    # `alsa-sys` is a `pkg-config` build script — so with `strictDeps` and no
+    # `alsa-lib` here the build fails outright rather than quietly producing a
+    # silent greeter. See `Cargo.toml`, where the feature is argued.
+    alsa-lib
     xorg.libX11
     xorg.libxcb
     xorg.libXcursor

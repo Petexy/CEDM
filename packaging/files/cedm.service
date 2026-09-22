@@ -67,6 +67,29 @@ IgnoreSIGPIPE=no
 # second of bare console where the shutdown splash should be.
 SendSIGHUP=yes
 
+# Deliberately not sandboxed, and this is the one place to say why, because
+# every hardening checklist in the world says to put ProtectSystem=strict,
+# PrivateTmp=yes and NoNewPrivileges=yes in a unit like this one.
+#
+# This unit is not the greeter. It is greetd, which runs as root because it
+# opens PAM sessions, and which forks *every user session on this machine* out
+# of itself. Process attributes set here are inherited across that fork and
+# survive the exec: NoNewPrivileges=yes would break every setuid helper in
+# every desktop that follows, PrivateTmp=yes would give each session a /tmp
+# nothing else on the machine can see, and a CapabilityBoundingSet would be a
+# ceiling on the user's whole login rather than on the login screen. A limit
+# meant for the thirty seconds somebody spends typing must not become a limit
+# on the eight hours they spend working.
+#
+# GDM's unit contains none of them either, for the same reason.
+#
+# The confinement that is wanted belongs one level down, on the process that is
+# actually the login screen, and that is where it is: CEDM runs as its own
+# unprivileged account with no login shell and no groups but `video`, and turns
+# off its own core dumps and ptrace-ability at start-up — see
+# `auth::keep_this_process_to_itself`. Neither reaches the session, because the
+# session is greetd's child rather than the greeter's.
+
 # The greeter opens PAM sessions, and pam_keyinit gives each one a keyring.
 # Under systemd's default the service gets a private keyring the sessions
 # beneath it cannot share, which is not what a login screen wants — pam_kwallet

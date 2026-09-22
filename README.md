@@ -82,7 +82,9 @@ cargo run -- --list-sessions
 - **Controller, keyboard and pointer are one interface.** D-pad or stick moves,
   South accepts, East backs out, North raises the on-screen keyboard, the
   shoulders step between sessions. Typing on the profile screen *is* the
-  password starting, and the first characters are kept rather than eaten.
+  password starting, and the first characters are kept rather than eaten —
+  unless PAM's first question turns out to be one that echoes its answer, in
+  which case what was typed too early is dropped rather than drawn in the clear.
 - **An on-screen keyboard where there is nothing else to type on** — offered by
   itself only when the machine has no physical keyboard, and always available
   from the button beside the field.

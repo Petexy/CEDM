@@ -1,8 +1,19 @@
-//! Read the selected user's LineXinBar palette without adopting their account.
+//! The names the shell's look is written in, and where an account keeps them.
+//!
+//! Vocabulary rather than reading. This module used to open a selected
+//! account's `shell.toml` and take the accent, the two materials and the
+//! keyboard straight out of it — "without adopting their account", which was
+//! true about privilege and not about trust. A greeter that opens a file inside
+//! a home directory is a greeter an account can point at anything it likes, and
+//! every one of those four settings already reaches the login screen the way it
+//! is supposed to: in the copy the account publishes on its way into a session,
+//! read under [`crate::reading`]'s rules and understood by [`crate::look::Look`],
+//! which knows all four keys and the one they used to share.
+//!
+//! What is left here is what the names mean — which palettes and materials
+//! exist, how a hand-typed one is matched, and where in a home the shell keeps
+//! them, for the account itself to find when it publishes.
 
-use serde::Deserialize;
-use std::fs::File;
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 /// Every accent name this greeter will accept out of a user's settings file.
@@ -12,7 +23,6 @@ use std::path::{Path, PathBuf};
 /// also what draws them — and a second spelling of it would be a list that can
 /// fall behind the colours it names without anything saying so.
 pub const DEFAULT_ACCENT: &str = crate::visual::theme::ACCENTS[0].name;
-const MAX_SETTINGS_BYTES: u64 = 256 * 1024;
 
 /// Every material the shell can be set to draw itself in, in the order its
 /// Settings column lists them — the same two for the wallpaper as for the marks.
@@ -119,33 +129,6 @@ pub fn canonical_theme(value: &str) -> Option<&'static str> {
         .find(|candidate| candidate.eq_ignore_ascii_case(value))
 }
 
-#[derive(Debug, Default, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-struct ShellSettings {
-    accent: Option<String>,
-    theme_wallpaper: Option<String>,
-    theme_icons: Option<String>,
-    /// What the two above were written under before they were two settings. See
-    /// [`LEGACY_THEME_KEY`].
-    theme: Option<String>,
-    /// Which arrangement the account's keyboards are set to, as the one key
-    /// both halves of that answer are written in. See
-    /// [`crate::keyboard::layout_key`].
-    keyboard_layout: Option<String>,
-}
-
-impl ShellSettings {
-    /// The material named for one half, or the one the whole shell was set to
-    /// before there were two halves.
-    fn theme(&self, part: crate::visual::theme::Part) -> Option<&String> {
-        match part {
-            crate::visual::theme::Part::Wallpaper => self.theme_wallpaper.as_ref(),
-            crate::visual::theme::Part::Icons => self.theme_icons.as_ref(),
-        }
-        .or(self.theme.as_ref())
-    }
-}
-
 /// LineXinBar's default settings path for a user with no `XDG_CONFIG_HOME`
 /// override.
 pub fn settings_path(home: &Path) -> PathBuf {
@@ -162,58 +145,6 @@ pub fn settings_path_with_config_home(home: &Path, config_home: Option<&Path>) -
         .join("lxb/shell.toml")
 }
 
-pub fn read_for_home(home: &Path) -> String {
-    read_path(&settings_path(home)).unwrap_or_else(|| DEFAULT_ACCENT.to_string())
-}
-
-/// The material an account's shell is set to draw one half of itself in, out of
-/// the same file the accent comes from.
-///
-/// Read separately rather than returned beside the accent: the two are wanted in
-/// different places — one tints the whole screen and the other decides what it is
-/// made of — and a settings file is a few hundred bytes read once per account.
-pub fn read_theme_for_home(home: &Path, part: crate::visual::theme::Part) -> Option<String> {
-    read_theme_path(&settings_path(home), part)
-}
-
-pub fn read_theme_path(path: &Path, part: crate::visual::theme::Part) -> Option<String> {
-    canonical_theme(read_settings(path)?.theme(part)?).map(str::to_string)
-}
-
-pub fn read_path(path: &Path) -> Option<String> {
-    canonical(&read_settings(path)?.accent?).map(str::to_string)
-}
-
-/// The keyboard arrangement an account's shell is set to, out of the same file
-/// the accent and the materials come from.
-///
-/// The one setting on this login screen that is about what somebody can *type*
-/// rather than what they are looking at, which is why it is read at all: a
-/// password with a Polish or a French letter in it cannot be typed on a board
-/// offering American ones. See [`crate::keyboard`].
-pub fn read_keyboard_for_home(home: &Path) -> Option<(String, String)> {
-    read_keyboard_path(&settings_path(home))
-}
-
-pub fn read_keyboard_path(path: &Path) -> Option<(String, String)> {
-    crate::keyboard::layout_key(&read_settings(path)?.keyboard_layout?)
-}
-
-fn read_settings(path: &Path) -> Option<ShellSettings> {
-    // A corrupt or hostile user-owned settings file must not make the greeter
-    // allocate without bound. Reading from the opened descriptor also avoids
-    // a metadata/read time-of-check race.
-    let file = File::open(path).ok()?;
-    let mut raw = String::new();
-    file.take(MAX_SETTINGS_BYTES + 1)
-        .read_to_string(&mut raw)
-        .ok()?;
-    if raw.len() as u64 > MAX_SETTINGS_BYTES {
-        return None;
-    }
-    toml::from_str(&raw).ok()
-}
-
 pub fn canonical(value: &str) -> Option<&'static str> {
     crate::visual::theme::ACCENTS
         .iter()
@@ -224,118 +155,38 @@ pub fn canonical(value: &str) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::fs;
 
-    #[test]
-    fn reads_the_shells_top_level_accent_and_ignores_the_rest() {
-        let root = std::env::temp_dir().join(format!("cedm-accent-{}", std::process::id()));
-        let path = root.join("shell.toml");
-        fs::create_dir_all(&root).unwrap();
-        fs::write(&path, "accent = \"green\"\n[display.TEST]\nhdr = true\n").unwrap();
-        assert_eq!(read_path(&path).as_deref(), Some("Green"));
-        fs::remove_file(path).unwrap();
-        fs::remove_dir(root).unwrap();
-    }
-
-    /// The two halves of the shell's Theme setting, and the key they shared
-    /// before there were two of them.
+    /// The names, matched the way a hand-typed setting has to be matched.
     ///
-    /// This greeter draws both — that wallpaper, and the shell's own marks in its
-    /// clock and its buttons — so it reads both keys. A file from the older shell
-    /// says one thing about the whole of it and meant it about both, which is the
-    /// difference between a machine that was stood down to `Simple` staying there
-    /// across an update and one that comes back up in the water.
+    /// What used to be tested through a file is tested here on the words
+    /// themselves, because the file is no longer this module's to open — the
+    /// published copy is, and `look::Look` is what reads it. See the tests
+    /// beside [`crate::look::Look::theme`] for the same questions asked of the
+    /// thing that now answers them.
     #[test]
-    fn reads_both_halves_of_the_theme_and_the_key_they_used_to_share() {
-        let root = std::env::temp_dir().join(format!("cedm-theme-{}", std::process::id()));
-        let path = root.join("shell.toml");
-        fs::create_dir_all(&root).unwrap();
-        let wallpaper = crate::visual::theme::Part::Wallpaper;
-        let icons = crate::visual::theme::Part::Icons;
-
-        fs::write(&path, "theme-wallpaper = \"simple\"\n").unwrap();
+    fn a_palette_and_a_material_are_matched_without_regard_to_case() {
+        assert_eq!(canonical("green"), Some("Green"));
+        assert_eq!(canonical("GREEN"), Some("Green"));
         assert_eq!(
-            read_theme_path(&path, wallpaper).as_deref(),
-            Some("Simple"),
-            "matched without regard to case, as the accent is"
-        );
-        assert_eq!(read_theme_path(&path, icons), None);
-
-        fs::write(&path, "theme = \"Simple\"\n").unwrap();
-        for part in [wallpaper, icons] {
-            assert_eq!(read_theme_path(&path, part).as_deref(), Some("Simple"));
-        }
-
-        fs::write(&path, "theme = \"Simple\"\ntheme-icons = \"Default\"\n").unwrap();
-        assert_eq!(read_theme_path(&path, wallpaper).as_deref(), Some("Simple"));
-        assert_eq!(
-            read_theme_path(&path, icons).as_deref(),
-            Some("Default"),
-            "the newer, narrower key outranks the one it replaced"
-        );
-
-        fs::write(&path, "theme-wallpaper = \"Frosted\"\n").unwrap();
-        assert_eq!(
-            read_theme_path(&path, wallpaper),
+            canonical("Chartreuse"),
             None,
-            "a material this greeter has not got is no answer at all"
+            "a palette the shell does not offer is no answer at all"
         );
-
-        fs::remove_file(path).unwrap();
-        fs::remove_dir(root).unwrap();
+        assert_eq!(canonical_theme("simple"), Some("Simple"));
+        assert_eq!(canonical_theme("Frosted"), None);
     }
 
-    /// An account whose shell stands one of their own pictures behind everything
-    /// is a login screen drawn in the shell's own scene, in their accent.
+    /// An account whose shell stands one of their own pictures behind
+    /// everything is greeted by the shell's own scene instead.
     ///
-    /// Not a fallback, and this is what the test is for: the value is understood
-    /// and deliberately not carried out, because the picture is a file under
-    /// that account's home directory and this program runs before any account
-    /// has been unlocked. What must never happen is the greeter refusing the
-    /// whole file over it and coming up in somebody else's colour.
+    /// Not a fallback: the value is understood and deliberately not carried
+    /// out, because the picture is a file under that account's home directory
+    /// and this program does not open those. What must never happen is the
+    /// greeter refusing the whole look over it.
     #[test]
     fn a_shell_showing_the_users_own_picture_is_greeted_by_the_default_scene() {
-        let root = std::env::temp_dir().join(format!("cedm-custom-{}", std::process::id()));
-        let path = root.join("shell.toml");
-        fs::create_dir_all(&root).unwrap();
-        let wallpaper = crate::visual::theme::Part::Wallpaper;
-
-        fs::write(
-            &path,
-            format!(
-                "accent = \"Green\"\ntheme-wallpaper = \"{CUSTOM_WALLPAPER}\"\n\
-                 theme-icons = \"Simple\"\nwallpaper-file = \"/home/somebody/x.jpg\"\n"
-            ),
-        )
-        .unwrap();
-
-        assert_eq!(
-            read_theme_path(&path, wallpaper).as_deref(),
-            Some(DEFAULT_THEME),
-            "the picture cannot be read here, so the scene is what stands in for it"
-        );
+        assert_eq!(canonical_theme(CUSTOM_WALLPAPER), Some(DEFAULT_THEME));
         assert_eq!(style(CUSTOM_WALLPAPER), Style::Default);
-        // The rest of the file is read exactly as it always was: the accent, and
-        // the other half of the theme, which has nothing to do with wallpapers.
-        assert_eq!(read_path(&path).as_deref(), Some("Green"));
-        assert_eq!(
-            read_theme_path(&path, crate::visual::theme::Part::Icons).as_deref(),
-            Some("Simple")
-        );
-
-        fs::remove_file(path).unwrap();
-        fs::remove_dir(root).unwrap();
-    }
-
-    #[test]
-    fn refuses_a_palette_the_shell_does_not_offer() {
-        let root = std::env::temp_dir().join(format!("cedm-bad-accent-{}", std::process::id()));
-        let path = root.join("shell.toml");
-        fs::create_dir_all(&root).unwrap();
-        fs::write(&path, "accent = \"Chartreuse\"\n").unwrap();
-        assert_eq!(read_path(&path), None);
-        fs::remove_file(path).unwrap();
-        fs::remove_dir(root).unwrap();
     }
 
     #[test]
@@ -349,18 +200,5 @@ mod tests {
             settings_path_with_config_home(home, Some(Path::new("relative-config"))),
             Path::new("/home/alex/.config/lxb/shell.toml")
         );
-    }
-
-    #[test]
-    fn rejects_an_oversized_settings_file() {
-        let root = std::env::temp_dir().join(format!("cedm-large-accent-{}", std::process::id()));
-        let path = root.join("shell.toml");
-        fs::create_dir_all(&root).unwrap();
-        let mut contents = String::from("accent = \"Blue\"\n#");
-        contents.push_str(&"x".repeat(MAX_SETTINGS_BYTES as usize));
-        fs::write(&path, contents).unwrap();
-        assert_eq!(read_path(&path), None);
-        fs::remove_file(path).unwrap();
-        fs::remove_dir(root).unwrap();
     }
 }

@@ -67,13 +67,12 @@ theme-wallpaper = "Simple"
 theme-icons = "Default"
 ```
 
-They are read exactly where `accent` is read: the account's own settings first,
-then the copy it published on the way into its last session, then the broker's
-state. So a machine set to `Simple` is in `Simple` from the moment the login
-screen appears, and nothing changes material in front of the user. A file — or a
-published look, or a broker — from before the setting was split carries a single
-`theme` key, which said one thing about the whole shell; it is still read, and
-both halves take it.
+They are read exactly where `accent` is read: the copy the account published on
+the way into its last session, then the broker's state. So a machine set to
+`Simple` is in `Simple` from the moment the login screen appears, and nothing
+changes material in front of the user. A published look — or a broker — from
+before the setting was split carries a single `theme` key, which said one thing
+about the whole shell; it is still read, and both halves take it.
 
 Only the **wallpaper's** half travels in the hand-over record, as its one
 optional field, because the reader it is written for is a compositor drawing a
@@ -173,12 +172,41 @@ hdr-sdr-brightness = 250
 
 The directory is `1733`: every account may create its own file, none may list,
 remove or overwrite another's, and the greeter — which needs only to open a name
-it already knows — has search access and no more. A published file is opened
-without following symlinks and is believed only while it belongs to the account
-it is named for, so squatting on a name that has never been published can deny
-that account its colour and can never forge one. Everything in it is bounded and
-range-checked on the way in and on the way out; a value that is not a setting is
-dropped rather than carried.
+it already knows — has search access and no more.
+
+A published file is opened under [`src/reading.rs`](../src/reading.rs), which is
+three refusals rather than one. It does not follow a symbolic link, so a link
+planted under somebody else's name leads nowhere. It refuses anything `fstat`
+says is not a plain file — and it makes that refusal without ever waiting on
+what it was pointed at, because a name in this directory can be a *named pipe*,
+and opening one of those for reading waits for a writer who never comes. That
+one mattered more than it looks: the greeter reads the published look of every
+account it enumerates as it comes up, not just the selected one, so a single
+pipe left under any name used to be a login screen that never appeared, for
+everybody. And it is believed only while it belongs to the account it is named
+for. What is left to a squatter is denying that account its colour, which is
+where every login screen was before any of this existed; forging one was never
+possible.
+
+Everything in it is bounded and range-checked on the way in and on the way out;
+a value that is not a setting is dropped rather than carried. Two settings get
+more than that:
+
+- **`enabled` is never passed on.** It is the one published setting that decides
+  whether there is a login screen rather than what it looks like, and the
+  greeter cannot sanity-check it — the compositor configuration is written
+  before any DRM device is open, so "at least one display is left on" is not a
+  question this side can answer about connectors it has not seen. An account
+  that turned off every screen it has, or a file left behind by a desk that has
+  since been rearranged, would otherwise be a machine whose next login screen is
+  on no screen at all. The session's own compositor still honours it a second
+  later, where it belongs and where whoever set it can undo it.
+- **`night-light-latitude` and `night-light-longitude` are rounded** to a tenth
+  of a degree on the way out — about eleven kilometres, which moves sunset by
+  under a minute and is the difference between publishing a town and publishing
+  a street. This file has to be world-readable, since the greeter reads it as
+  nobody in particular, and these two numbers are the only thing in it that is
+  about a person rather than about a desktop.
 
 **It is current rather than one login old, and it is the shell that keeps it
 that way.** Writing the copy once at sign-in would be right until the first time
@@ -204,11 +232,20 @@ shell has nothing to publish at all.
 
 ### The greeter's own cache
 
-For each visible local account, CEDM reads the same top-level `accent` value
-from `.config/lxb/shell.toml` where it can, then the copy that account
-published, bounded to 256 KiB and restricted to LineXinBar's canonical twelve
-palette names. It smoothly previews that user's whole palette when selection
-moves.
+For each visible local account, CEDM reads the top-level `accent` value out of
+the copy that account published, bounded to 256 KiB and restricted to
+LineXinBar's canonical twelve palette names. It smoothly previews that user's
+whole palette when selection moves.
+
+It used to read `.config/lxb/shell.toml` first "where it can", on the grounds
+that the settings themselves are fresher than any copy of them. They are, and it
+was still the wrong place to look. On an ordinary machine a home is `0700` and
+the read simply failed; on a machine where it succeeds — a development box, a
+home an administrator has opened up — it is an account deciding what the login
+screen opens, waits on and allocates for, before anybody has signed in. GDM has
+never read a home directory and neither does this, now in the code as well as in
+this document. Nothing is lost by it: LineXinBar publishes as it saves, so the
+copy is not the stale one of the pair.
 
 The future privileged seat broker may supply cached accent data in
 `/var/lib/console-experience-desktop-manager/state.toml`:

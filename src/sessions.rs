@@ -2,8 +2,24 @@
 
 use std::collections::BTreeMap;
 use std::fs;
+use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
+
+/// The most of a desktop entry that will ever be read.
+///
+/// These are the machine's own files, in the machine's own directories, and
+/// nothing here suspects them. The bound is the house rule rather than a
+/// suspicion: this runs before anybody has signed in, and the one thing about
+/// it that is not fixed at compile time is `XDG_DATA_DIRS` — which a
+/// distribution's `/etc/profile.d` fragment sets, which means the list of
+/// directories walked below is the one part of this that a machine can get
+/// wrong. A greeter that met something enormous in one of them should show a
+/// login screen without that session on it, rather than not show one.
+///
+/// Generous by two orders of magnitude: a session entry is a dozen lines and a
+/// hundred translations of two of them.
+const MAX_ENTRY_BYTES: u64 = 256 * 1024;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
@@ -122,8 +138,23 @@ pub fn discover(roots: &[(PathBuf, Kind)]) -> Vec<Session> {
     found.into_values().collect()
 }
 
+/// One desktop entry, bounded, and only if it is a plain file.
+///
+/// Through [`crate::reading`] like everything else read on this side of a
+/// login: a directory in `XDG_DATA_DIRS` is not a directory this program
+/// created, and "the greeter would not come up" is a worse answer to anything
+/// found in one than "that session is not offered".
+fn read_entry(path: &Path) -> Option<String> {
+    let file = crate::reading::open(path, crate::reading::Owner::Anyone)?;
+    let mut raw = String::new();
+    file.take(MAX_ENTRY_BYTES + 1)
+        .read_to_string(&mut raw)
+        .ok()?;
+    (raw.len() as u64 <= MAX_ENTRY_BYTES).then_some(raw)
+}
+
 pub fn parse(path: &Path, kind: Kind) -> Option<Session> {
-    let raw = fs::read_to_string(path).ok()?;
+    let raw = read_entry(path)?;
     let mut section = false;
     let mut fields = BTreeMap::<String, String>::new();
     for original in raw.lines() {

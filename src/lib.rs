@@ -16,6 +16,7 @@ pub mod i18n;
 pub mod keyboard;
 pub mod look;
 pub mod power;
+pub mod reading;
 pub mod sessions;
 pub mod sound;
 pub mod state;

@@ -13,6 +13,58 @@ use zeroize::Zeroizing;
 
 pub type AttemptId = u64;
 
+/// Stop this process being copied while it is holding somebody's answer.
+///
+/// Two calls, and they close two different doors.
+///
+/// `RLIMIT_CORE` at nothing means a crash writes no core file. A greeter dies
+/// the way any program dies — a panic, a driver fault, a signal — and it can
+/// die in the half second between somebody finishing their password and greetd
+/// being told it. Without this the kernel hands what was in memory to whatever
+/// `kernel.core_pattern` names, which on a systemd machine is
+/// `systemd-coredump` and a file under `/var/lib/systemd/coredump`. The
+/// password is in that file, in the clear, and it outlives the login.
+///
+/// `PR_SET_DUMPABLE` at zero is the larger one, because it is about a machine
+/// that is working rather than one that has crashed. A process can be read
+/// through `/proc/<pid>/mem` by anything the kernel will let attach to it, and
+/// what the kernel lets attach by default is anything running as the same
+/// account. This greeter is not alone under its account: the compositor that
+/// gives it a seat runs as `cedm-greeter`, so does the session bus beside it,
+/// and so does anything either of them starts. None of those is hostile, and
+/// none of them has to be — the point is that a login screen should not be
+/// readable by its own neighbours, and one call is the difference.
+///
+/// Neither reaches the session that follows. greetd starts that itself, as
+/// root, after this process has exited: it is not a child of the greeter and
+/// inherits nothing from it. That is the half of this worth being careful
+/// about — a limit meant for the thirty seconds somebody spends typing must not
+/// become a limit on the eight hours they spend working, and here it cannot.
+/// Programs this greeter starts for itself do inherit the core limit, which is
+/// right; the kernel clears the dumpable flag for them at `exec`, which is also
+/// right, since none of them is holding anything.
+///
+/// Failure is not worth reporting and not worth stopping for. Both calls are
+/// refused only on a kernel without them, and a login screen that would not
+/// come up because it could not tighten a limit is a worse machine than one
+/// that comes up slightly less tightened.
+pub fn keep_this_process_to_itself() {
+    // SAFETY: both calls take scalars, touch no memory this owns, and are
+    // valid at any point in a process's life.
+    unsafe {
+        let none = libc::rlimit {
+            rlim_cur: 0,
+            rlim_max: 0,
+        };
+        if libc::setrlimit(libc::RLIMIT_CORE, &none) != 0 {
+            tracing::debug!("could not turn core dumps off for the login screen");
+        }
+        if libc::prctl(libc::PR_SET_DUMPABLE, 0, 0, 0, 0) != 0 {
+            tracing::debug!("could not make the login screen unreadable to its neighbours");
+        }
+    }
+}
+
 pub enum Command {
     Begin {
         attempt: AttemptId,
@@ -621,6 +673,33 @@ fn drive(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The two doors [`keep_this_process_to_itself`] closes, read back from the
+    /// kernel rather than taken on trust.
+    ///
+    /// Deliberately not run in parallel with anything that cares: it changes
+    /// the whole test process, which is fine — a test binary has nothing to
+    /// dump and nothing to hide — and irreversible for the dumpable flag on
+    /// some kernels, which is why nothing after it asserts the opposite.
+    #[test]
+    fn a_login_screen_leaves_no_core_file_and_no_way_in() {
+        keep_this_process_to_itself();
+
+        let mut core = libc::rlimit {
+            rlim_cur: 1,
+            rlim_max: 1,
+        };
+        // SAFETY: `getrlimit` writes only into `core`, which outlives the call.
+        assert_eq!(unsafe { libc::getrlimit(libc::RLIMIT_CORE, &mut core) }, 0);
+        assert_eq!(core.rlim_cur, 0, "a crash here would write a password out");
+
+        // SAFETY: `PR_GET_DUMPABLE` reads a flag and touches no memory.
+        assert_eq!(
+            unsafe { libc::prctl(libc::PR_GET_DUMPABLE, 0, 0, 0, 0) },
+            0,
+            "anything running as this account could read this process"
+        );
+    }
     use std::fs;
     use std::io::{Read, Write};
     use std::os::unix::net::UnixListener;

@@ -68,19 +68,28 @@ in
 
     services.udev.packages = [ cfg.package ];
 
-    # The greeter reads /var/lib/cedm/state.toml
-    # and must not be able to write it: accent data the privileged broker
-    # publishes would otherwise be forgeable by the unprivileged process that
-    # displays it.
+    # The two directories, at the paths the binary actually uses.
+    #
+    # `/var/lib/console-experience-desktop-manager` and not `/var/lib/cedm`:
+    # the name is compiled into the greeter — `look::PUBLISHED` and
+    # `state::PATH` — and this module named a shorter one, so on a NixOS
+    # machine nothing was ever published and every login screen came up in the
+    # default colour. Nothing said so, because a greeter with nothing published
+    # is the ordinary state of a machine nobody has signed into yet.
+    #
+    # The greeter reads state.toml and must not be able to write it: accent
+    # data the privileged broker publishes would otherwise be forgeable by the
+    # unprivileged process that displays it.
     #
     # `published/` is the other direction and the other permissions: each
     # account writes its own accent there as its session starts, because a
     # greeter cannot read a home directory. Search without read, and sticky, so
     # that a file can be created and never removed or overwritten by anybody
-    # but its owner. See packaging/files/tmpfiles.conf for the whole of it.
+    # but its owner. See packaging/files/tmpfiles.conf for the whole of it —
+    # these two rules have to stay the same as the ones in that file.
     systemd.tmpfiles.rules = [
-      "d /var/lib/cedm 0755 root root -"
-      "d /var/lib/cedm/published 1733 root root -"
+      "d /var/lib/console-experience-desktop-manager 0755 root root -"
+      "d /var/lib/console-experience-desktop-manager/published 1733 root root -"
     ];
 
     services.dbus.enable = true;

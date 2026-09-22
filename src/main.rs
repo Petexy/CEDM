@@ -21,6 +21,24 @@ use winit::window::{Fullscreen, Window, WindowAttributes, WindowId};
 use zeroize::{Zeroize, Zeroizing};
 
 const MAX_PROMPT_INPUT_BYTES: usize = 4096;
+
+/// A buffer for something somebody typed, big enough from the start that it
+/// never has to grow.
+///
+/// [`Zeroizing`] wipes a `String` when it is dropped, and wipes the whole of
+/// whatever buffer that `String` is holding at the time. What it cannot do is
+/// reach a buffer the `String` has already let go of — and a `String` that
+/// outgrows its capacity allocates a larger one, copies itself into it, and
+/// frees the old one without touching the bytes. Half a password can be left
+/// in freed memory that way, once per doubling, which for a password typed one
+/// character at a time is several times over.
+///
+/// So the room is taken once, up front, at the most any of these is ever
+/// allowed to hold. Four kilobytes is nothing, and past this point every push
+/// writes into the same allocation the wipe will find.
+fn typed_buffer() -> Zeroizing<String> {
+    Zeroizing::new(String::with_capacity(MAX_PROMPT_INPUT_BYTES))
+}
 /// How often the wall clock is re-read. The panel shows minutes, so this is
 /// already far finer than anything it can display.
 const CLOCK_INTERVAL: Duration = Duration::from_secs(1);
@@ -270,6 +288,14 @@ fn main() -> anyhow::Result<()> {
         }
         return Ok(());
     }
+    // Past here this process is the login screen, and the login screen is the
+    // thing that holds a password between the last keystroke and greetd. The
+    // two returns above are not — one publishes a file inside somebody's own
+    // session and the other writes a display configuration — so this is the
+    // first line of the run that needs it, and the last one before a window,
+    // a device or a socket exists. See [`cedm::auth::keep_this_process_to_itself`].
+    cedm::auth::keep_this_process_to_itself();
+
     // A screenshot must never be able to open a PAM conversation, whatever
     // else was asked for on the same command line.
     if args.shot.is_some() {
@@ -838,7 +864,7 @@ impl Application {
             desired_column: 0,
             stage: Stage::Choose,
             stage_transition: None,
-            input: Zeroizing::new(String::new()),
+            input: typed_buffer(),
             typed_ahead: None,
             board: Board::default(),
             keyboard_opened: None,
@@ -1147,7 +1173,12 @@ impl Application {
     }
 
     fn submit_answer(&mut self) {
+        // Moved out rather than copied, so the buffer the characters are
+        // actually in is the one that goes to the worker and is wiped there.
+        // What is left behind is an empty `String` with no allocation at all,
+        // and the next question is asked into a fresh full-sized one.
         let answer = Zeroizing::new(std::mem::take(&mut *self.input));
+        self.input = typed_buffer();
         self.hide_keyboard(Focus::Continue);
         if self.args.preview {
             drop(answer);
@@ -1531,13 +1562,64 @@ impl Application {
         {
             self.typed_ahead = Some(TypedAhead {
                 attempt,
-                text: Zeroizing::new(String::new()),
+                text: typed_buffer(),
             });
         }
         if let Some(held) = &mut self.typed_ahead {
             if held.text.len() + character.len_utf8() <= MAX_PROMPT_INPUT_BYTES {
                 held.text.push(character);
             }
+        }
+    }
+
+    /// Put PAM's question on the screen, and decide what may already be in the
+    /// field under it.
+    ///
+    /// Its own function rather than an arm of [`Application::poll_auth`],
+    /// because the decision it makes about held typing is one a test has to be
+    /// able to ask about directly, and the alternative is a test that stands up
+    /// a greetd conversation to ask it.
+    fn open_prompt(&mut self, message: String, secret: bool) {
+        self.input.zeroize();
+        self.board = Board::default();
+        let typed = self.take_typed_ahead();
+        self.transition_to(Stage::Authenticating {
+            prompt: translated_prompt(message),
+            secret,
+        });
+        self.focus = Focus::Prompt;
+        match typed {
+            // Answering already, on a keyboard the greeter can now be sure of.
+            // Raising the on-screen board over a field with typing already in
+            // it would be offering a worse copy of the keys the answer is
+            // coming from.
+            Some(text) if secret => self.input = text,
+            // A held answer, and a question this screen is about to show the
+            // answer to. Two different things, and the held one does not
+            // survive the discovery.
+            //
+            // What is held here was typed at a screen that had not asked
+            // anything yet, which is somebody typing their password — see
+            // [`Application::type_into_login`], where that is said outright.
+            // PAM is entitled to ask something else first with echo on, and a
+            // stack that does is a legitimate stack: a one-time code, a new
+            // account name, a question during a password change. Carrying the
+            // held text into one of those would put a password on the screen in
+            // plain characters, and hand it to a module that is within its
+            // rights to write a visible answer into the log.
+            //
+            // So it is dropped, and dropping it is what zeroizes it. The field
+            // is left empty and the question is asked honestly; what was typed
+            // too early is typed again.
+            Some(held) => {
+                drop(held);
+                tracing::debug!(
+                    "discarded an answer typed ahead rather than showing it in \
+                     a prompt that echoes"
+                );
+            }
+            None if secret => self.offer_keyboard(),
+            None => {}
         }
     }
 
@@ -1986,23 +2068,7 @@ impl Application {
                 AuthEvent::Prompt {
                     message, secret, ..
                 } if matches!(self.stage, Stage::Busy(_) | Stage::Authenticating { .. }) => {
-                    self.input.zeroize();
-                    self.board = Board::default();
-                    let typed = self.take_typed_ahead();
-                    self.transition_to(Stage::Authenticating {
-                        prompt: translated_prompt(message),
-                        secret,
-                    });
-                    self.focus = Focus::Prompt;
-                    match typed {
-                        // Answering already, on a keyboard the greeter can now
-                        // be sure of. Raising the on-screen board over a field
-                        // with typing already in it would be offering a worse
-                        // copy of the keys the answer is coming from.
-                        Some(text) => self.input = text,
-                        None if secret => self.offer_keyboard(),
-                        None => {}
-                    }
+                    self.open_prompt(message, secret)
                 }
                 AuthEvent::Status { message, .. }
                     if matches!(self.stage, Stage::Busy(_) | Stage::Authenticating { .. }) =>
@@ -2709,12 +2775,9 @@ fn write_compositor_config(path: &Path, greeter_arguments: &[String]) -> anyhow:
         let user = cedm::users::discover()
             .into_iter()
             .find(|user| user.name == name)?;
-        // The published copy first, and the account's own settings only if
-        // this greeter can somehow read them — a development machine, or a
-        // home the administrator has opened up. Both are the same file at
-        // one remove; see `cedm::look`.
+        // The published copy, and nothing else. See `cedm::look` for what the
+        // greeter is and is not allowed to read.
         cedm::look::published(&user.name, user.uid)
-            .or_else(|| Some(cedm::look::Look::read(&user.home, None)))
             .filter(|look| *look != cedm::look::Look::default())
             .map(|look| (user.name, look))
     });
@@ -2809,9 +2872,7 @@ fn sound_output(state: &State, preferences: &Preferences, users: &[User]) -> ced
     let Some(user) = users.iter().find(|user| user.name == last) else {
         return cedm::sound::Want::default();
     };
-    let look = cedm::look::published(&user.name, user.uid)
-        .or_else(|| Some(cedm::look::Look::read(&user.home, None)))
-        .unwrap_or_default();
+    let look = cedm::look::published(&user.name, user.uid).unwrap_or_default();
     cedm::sound::Want {
         card: look.sound_card.clone(),
         gain: look.sound_gain,
@@ -2828,8 +2889,7 @@ fn night_light(
         .as_deref()
         .or(state.last_user.as_deref())?;
     let user = users.iter().find(|user| user.name == last)?;
-    let look = cedm::look::published(&user.name, user.uid)
-        .or_else(|| Some(cedm::look::Look::read(&user.home, None)))?;
+    let look = cedm::look::published(&user.name, user.uid)?;
     cedm::gamma::start(&look, cedm::clock::Now::read())
 }
 
@@ -2929,17 +2989,25 @@ fn user_accent_for_the_login_screen(account: Option<&str>, look: &cedm::look::Lo
         .unwrap_or_else(|| cedm::accent::DEFAULT_ACCENT.to_string())
 }
 
-/// Prefer the user's current shell setting whenever it is readable, then the
-/// copy they published on the way into their last session, then the broker's.
+/// The copy the account published on its way into its last session, then the
+/// broker's.
 ///
-/// In that order because it is the order of freshness, and every step of it is
-/// a step further from the account: the settings themselves are what the shell
-/// is set to *now*, a published copy is what it was set to at the last sign-in
-/// through this greeter, and broker state is whatever a privileged process was
-/// told at some point. On an ordinary machine the first of those is
-/// unreadable — a home directory is not the greeter's to walk into — and the
-/// login screen stands or falls on the second.
-/// The same three places, in the same order of freshness, for the two materials
+/// Two places rather than three, and the one that is gone was the account's own
+/// `shell.toml`. A greeter does not read a home directory. It used to try —
+/// "only if this greeter can somehow read them", which on an ordinary machine
+/// is never and on a machine where it is ever true is a machine where an
+/// account can decide what a login screen opens, waits on, and allocates for.
+/// A home directory is the account's; whatever the account wants the login
+/// screen to know about it comes out to meet the greeter in the published copy,
+/// which is written by the account, owned by the account, and read under
+/// [`cedm::reading`]'s rules. That is the same boundary GDM draws, and it is
+/// the boundary this project's own documentation had already claimed.
+///
+/// Nothing is lost by it. LineXinBar publishes as it saves — the same function
+/// that writes `shell.toml` runs `--publish-look` after it — so the copy is not
+/// the stale one of the pair; on an ordinary machine it was always the only
+/// readable one.
+/// The same two places, in the same order of freshness, for the two materials
 /// the account's shell draws in.
 ///
 /// Beside [`user_accent`] rather than folded into it: the accent is a colour this
@@ -2948,18 +3016,15 @@ fn user_accent_for_the_login_screen(account: Option<&str>, look: &cedm::look::Lo
 /// predates the setting simply falls through to the default, which is the shell's
 /// own look — the right answer for a machine nobody has said is slow.
 ///
-/// Both halves walk the same three places independently, and they have to: a
+/// Both halves walk the same two places independently, and they have to: a
 /// published look from the older shell answers both at once out of its one
 /// `theme` key, and a broker that only knows the one map does the same, but a
-/// current `shell.toml` can perfectly well name one half and leave the other.
+/// newer published copy can perfectly well name one half and leave the other.
 fn user_theme(state: &State, user: &User) -> Materials {
     let of = |part| {
-        cedm::accent::read_theme_for_home(&user.home, part)
-            .or_else(|| {
-                cedm::look::published(&user.name, user.uid)
-                    .and_then(|look| look.theme(part))
-                    .map(str::to_string)
-            })
+        cedm::look::published(&user.name, user.uid)
+            .and_then(|look| look.theme(part))
+            .map(str::to_string)
             .or_else(|| {
                 match part {
                     visual::theme::Part::Wallpaper => state.theme_for(&user.name),
@@ -2978,17 +3043,17 @@ fn user_theme(state: &State, user: &User) -> Materials {
 
 /// The keyboard the on-screen board should be a picture of for `user`.
 ///
-/// The account's own settings first and the copy they published second, which
-/// is the same order of freshness [`user_accent`] walks — and then the
-/// machine's own keyboard rather than the broker's state, which has never held
-/// this and does not need to. A colour nobody has published has to be invented;
-/// a keyboard does not, because the machine this greeter is running on has one.
+/// The copy the account published, and then the machine's own keyboard rather
+/// than the broker's state, which has never held this and does not need to. A
+/// colour nobody has published has to be invented; a keyboard does not, because
+/// the machine this greeter is running on has one.
 ///
-/// The published copy is what answers on an ordinary machine, where a home
-/// directory is not the greeter's to walk into. See [`cedm::look`].
+/// The published copy is the only place this is read from, for the reason
+/// [`user_accent`] gives: a home directory is not the greeter's to walk into.
+/// See [`cedm::look`].
 fn user_keyboard(user: &User, machine: &(String, String)) -> (String, String) {
-    cedm::accent::read_keyboard_for_home(&user.home)
-        .or_else(|| cedm::look::published(&user.name, user.uid).and_then(|look| look.keyboard()))
+    cedm::look::published(&user.name, user.uid)
+        .and_then(|look| look.keyboard())
         .unwrap_or_else(|| machine.clone())
 }
 
@@ -3025,12 +3090,9 @@ fn user_legend(user: &User) -> cedm::ui::Legend {
 }
 
 fn user_accent(state: &State, user: &User) -> String {
-    cedm::accent::read_path(&cedm::accent::settings_path(&user.home))
-        .or_else(|| {
-            cedm::look::published(&user.name, user.uid)
-                .and_then(|look| look.accent())
-                .map(str::to_string)
-        })
+    cedm::look::published(&user.name, user.uid)
+        .and_then(|look| look.accent())
+        .map(str::to_string)
         .or_else(|| {
             state
                 .accent_for(&user.name)
@@ -3230,8 +3292,23 @@ mod tests {
         assert_eq!(resolve_session_index(&sessions, []), 1);
     }
 
+    /// A home directory the greeter could read is a home directory the greeter
+    /// still does not read.
+    ///
+    /// This test used to assert the opposite — that a `shell.toml` readable
+    /// from here outranked everything, because it was the freshest of the three
+    /// places an account's look could come from. It was the freshest and it was
+    /// the wrong place to look: on an ordinary machine a home is `0700` and the
+    /// read simply failed, and on a machine where it succeeds an account can
+    /// point the login screen at whatever it likes. So the settings file below
+    /// is deliberately readable, deliberately says something different from
+    /// everything else, and is deliberately not the answer. What is left is the
+    /// broker's, because nothing was published.
+    ///
+    /// GDM draws the same line and never crosses it; so does this greeter's own
+    /// documentation, which claimed it before the code did.
     #[test]
-    fn live_shell_accent_wins_over_stale_broker_cache() {
+    fn a_readable_home_is_still_not_somewhere_the_greeter_looks() {
         let unique = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
@@ -3266,16 +3343,18 @@ mod tests {
                 .collect(),
             icon_themes: Default::default(),
         };
-        assert_eq!(user_accent(&state, &user), "Blue");
+        assert_eq!(
+            user_accent(&state, &user),
+            "Red",
+            "the broker's, because nothing was published and the home is not read"
+        );
         assert_eq!(
             user_theme(&state, &user),
             Materials {
-                // Named in the account's own file, which is the freshest of the
-                // three places and outranks the broker.
-                wallpaper: "Simple".to_string(),
-                // Not named there at all, so it falls through to the broker's one
-                // map — which is what a broker that has only ever known one
-                // material says about both halves.
+                // The broker's one map, which is what a broker that has only
+                // ever known one material says about both halves. `Simple` sits
+                // in a readable file two directories away and does not appear.
+                wallpaper: "Default".to_string(),
                 icons: "Default".to_string(),
             }
         );
@@ -3501,6 +3580,100 @@ mod tests {
             console.take_typed_ahead().is_none(),
             "an answer meant for one conversation was offered to another"
         );
+    }
+
+    /// A password is never copied out of the buffer it was typed into.
+    ///
+    /// `Zeroizing` wipes what a `String` is holding when it is dropped, and a
+    /// `String` that outgrows its capacity has already let go of the buffer it
+    /// was holding: it allocates a larger one, copies, and frees the old bytes
+    /// untouched. Typing one character at a time is the shape that does it,
+    /// once per doubling, so what is left in freed memory is the first half of
+    /// a password, then the first three quarters of it.
+    ///
+    /// The room is taken once instead, at the most the field is ever allowed to
+    /// hold, and the test is that the address does not move.
+    #[test]
+    fn a_typed_answer_stays_in_the_one_buffer_that_will_be_wiped() {
+        let mut console = preview_application(vec![user("Alex")]);
+        console.stage = Stage::Authenticating {
+            prompt: "Password".into(),
+            secret: true,
+        };
+        let first = console.input.as_ptr();
+        assert!(console.input.capacity() >= MAX_PROMPT_INPUT_BYTES);
+
+        for character in
+            "a-long-enough-answer-to-have-doubled-a-small-buffer-several-times-over".chars()
+        {
+            console.push_input(character);
+        }
+        assert_eq!(
+            console.input.as_ptr(),
+            first,
+            "the characters moved, so an earlier copy of them was freed unwiped"
+        );
+
+        // And the field the next question is asked into is a full-sized one
+        // again, rather than whatever `mem::take` left behind.
+        console.submit_answer();
+        assert!(console.input.is_empty());
+        assert!(console.input.capacity() >= MAX_PROMPT_INPUT_BYTES);
+
+        // The same for what is held before greetd has asked anything.
+        let mut console = preview_application(vec![user("Alex")]);
+        console.stage = Stage::Busy("Starting authentication…".into());
+        console.type_into_login("h");
+        let held = console
+            .typed_ahead
+            .as_ref()
+            .expect("a character typed at a screen with no field");
+        assert!(held.text.capacity() >= MAX_PROMPT_INPUT_BYTES);
+    }
+
+    /// An answer typed before the question does not survive a question that
+    /// shows its answer.
+    ///
+    /// Typing at a screen that has not asked anything yet is somebody typing
+    /// their password — the greeter says so itself, and holds the characters
+    /// for the prompt it expects. PAM is allowed to ask something else first
+    /// with echo on: a one-time code, an account name, a question in the middle
+    /// of a password change. The held text must not be carried into one of
+    /// those, because the field would draw it in plain characters and the
+    /// answer would go to a module entitled to log a visible one.
+    #[test]
+    fn what_was_typed_ahead_is_never_carried_into_a_prompt_that_echoes() {
+        let mut console = preview_application(vec![user("Alex")]);
+        console.attempt = 7;
+        console.stage = Stage::Busy("Starting authentication…".into());
+        console.type_into_login("hunter2");
+
+        console.open_prompt("One-time code".into(), false);
+        assert!(
+            matches!(console.stage, Stage::Authenticating { secret: false, .. }),
+            "the question is asked as PAM asked it"
+        );
+        assert!(
+            console.input.is_empty(),
+            "a password must not be standing in a field the screen draws in the clear"
+        );
+        assert!(
+            console.take_typed_ahead().is_none(),
+            "and it must not be waiting for the next prompt either"
+        );
+
+        // The prompt it was typed for still gets it: this is a rule about
+        // echoing questions, not a greeter that has stopped holding typing.
+        let mut console = preview_application(vec![user("Alex")]);
+        console.attempt = 7;
+        console.stage = Stage::Busy("Starting authentication…".into());
+        console.type_into_login("hunter2");
+        console.open_prompt("Password".into(), true);
+        assert!(matches!(
+            console.stage,
+            Stage::Authenticating { secret: true, .. }
+        ));
+        assert_eq!(console.input.as_str(), "hunter2");
     }
 
     /// PAM's own sentence for a wrong password is `authentication error:

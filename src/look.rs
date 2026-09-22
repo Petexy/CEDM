@@ -56,7 +56,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Write};
-use std::os::unix::fs::{MetadataExt, OpenOptionsExt};
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 
 /// Where accounts publish, and where the greeter reads.
@@ -451,7 +451,7 @@ impl Look {
                 crate::sun::Location::exact(*latitude, *longitude).is_some()
             });
         (self.night_light_latitude, self.night_light_longitude) = match named {
-            Some((latitude, longitude)) => (Some(latitude), Some(longitude)),
+            Some((latitude, longitude)) => (Some(coarse(latitude)), Some(coarse(longitude))),
             None => (None, None),
         };
         // An ALSA card id, which is what it will be compared against and never
@@ -529,6 +529,25 @@ impl Look {
     }
 }
 
+/// A coordinate rounded to a tenth of a degree, which is a town rather than a
+/// house.
+///
+/// Applied on the way out, which is the direction that matters: a published
+/// look is world-readable — it has to be, since the greeter reads it as nobody
+/// in particular — and these two numbers are the only thing in the file that
+/// says where its owner is. A tenth of a degree is about eleven kilometres, and
+/// the question they are here to answer is what time the sun sets, which over
+/// eleven kilometres moves by under a minute. Nobody looking at a login screen
+/// can tell; anybody with an account on the machine can tell the difference
+/// between a town and a street.
+///
+/// The account's own settings keep whatever precision was written in them. This
+/// is about the copy that comes out to meet the greeter, and it is the only
+/// thing in that copy that is deliberately less exact than its source.
+fn coarse(degrees: f64) -> f64 {
+    (degrees * 10.0).round() / 10.0
+}
+
 /// When the night light burns, as the shell's settings spell it.
 const SCHEDULES: [&str; 3] = ["all-day", "sunset-to-sunrise", "hours"];
 
@@ -571,6 +590,29 @@ struct CompositorFileOutput {
     scale: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     transform: Option<String>,
+    /// Never `Some(false)`, and in practice never `Some` at all.
+    ///
+    /// This is the one setting in a published look that can decide whether
+    /// there is a login screen. The rest describe how a picture appears —
+    /// wrong mode, wrong corner, wrong colour, all of them visible and all of
+    /// them recoverable by the person looking at them. `enabled = false` is
+    /// the compositor leaving a connector dark, and a look naming every
+    /// connector on the machine that way is a machine whose next login screen
+    /// is on no screen at all.
+    ///
+    /// It cannot be repaired by counting, either. A greeter cannot check that
+    /// one enabled display is left, because it has no idea which displays are
+    /// there: the file is written before the compositor has opened the DRM
+    /// device, and an account that leaves `DP-1` enabled and `HDMI-A-1`
+    /// disabled has darkened a machine that today has only the second one
+    /// plugged in. A stale file does it by accident, and a shared machine lets
+    /// one account do it to everybody else on purpose.
+    ///
+    /// So the greeter's compositor is never told to turn a display off. What
+    /// the account meant by it is still honoured — by the session's own
+    /// compositor, a second later, which is where the setting belongs and
+    /// where it can be undone by whoever set it. A login screen is the one
+    /// thing on this machine that has to come up on everything.
     #[serde(skip_serializing_if = "Option::is_none")]
     enabled: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -638,7 +680,9 @@ impl Look {
                 position: display.position,
                 scale: display.scale,
                 transform: display.transform.clone(),
-                enabled: display.enabled,
+                // Deliberately never carried. See `enabled` on
+                // [`CompositorFileOutput`] for the whole of why.
+                enabled: None,
                 adaptive_sync: display.adaptive_sync,
                 hdr: display.hdr.or(self.hdr),
                 hdr_sdr_brightness: display.hdr_sdr_brightness.or(self.hdr_sdr_brightness),
@@ -912,27 +956,17 @@ pub fn published(name: &str, uid: u32) -> Option<Look> {
 /// What `uid` last published, if that is who published it.
 ///
 /// The directory is one accounts write into, so a file found under an
-/// account's name is not yet that account's file. Two things make it one: it
-/// is opened without following a symlink, so a link planted under somebody
-/// else's name leads nowhere, and it is read only when the account being asked
-/// about is the account that owns it. What is left to a squatter is denying
-/// somebody a colour, which is where every login screen was before any of this
-/// existed.
+/// account's name is not yet that account's file, and it is not even yet a
+/// file. [`crate::reading::open`] settles both: it refuses anything that is
+/// not a plain file, it refuses a plain file the account does not own, and it
+/// refuses all of that without ever waiting on what it was pointed at — which
+/// is the part a login screen cannot do without, because a named pipe left
+/// under somebody's name would otherwise hold the whole screen before anyone
+/// had signed in. What is left to a squatter is denying somebody a colour,
+/// which is where every login screen was before any of this existed.
 pub fn published_in(directory: &Path, name: &str, uid: u32) -> Option<Look> {
     let path = published_path_in(directory, name)?;
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(&path)
-        .ok()?;
-    let metadata = file.metadata().ok()?;
-    if !metadata.is_file() || metadata.uid() != uid {
-        tracing::debug!(
-            path = %path.display(),
-            "ignoring a published look this account does not own"
-        );
-        return None;
-    }
+    let file = crate::reading::open(&path, crate::reading::Owner::Uid(uid))?;
     Some(read_open::<Look>(file)?.sane())
 }
 
@@ -1317,6 +1351,97 @@ enabled = false
         fs::remove_dir_all(home).unwrap();
     }
 
+    /// The two halves of the shell's Theme setting, and the key they shared
+    /// before there were two of them.
+    ///
+    /// This greeter draws both — the wallpaper, and the shell's own marks in
+    /// its clock and its buttons — so it reads both keys. A file from the older
+    /// shell says one thing about the whole of it and meant it about both,
+    /// which is the difference between a machine deliberately stood down to
+    /// `Simple` staying there across an update and one that comes back up in
+    /// the water.
+    ///
+    /// Asked of `Look` because `Look` is what answers it. It used to be asked
+    /// of a reader in `accent` that opened a selected account's home directory,
+    /// and that reader is gone; the same file reaches the login screen as the
+    /// copy the account publishes, and this is the type that understands it.
+    #[test]
+    fn both_halves_of_the_theme_and_the_key_they_used_to_share() {
+        let wallpaper = crate::visual::theme::Part::Wallpaper;
+        let icons = crate::visual::theme::Part::Icons;
+
+        let look = Look::read(&home_with("theme-wallpaper = \"simple\"\n", None), None);
+        assert_eq!(
+            look.theme(wallpaper),
+            Some("Simple"),
+            "matched without regard to case, as the accent is"
+        );
+        assert_eq!(look.theme(icons), None);
+
+        let look = Look::read(&home_with("theme = \"Simple\"\n", None), None);
+        for part in [wallpaper, icons] {
+            assert_eq!(look.theme(part), Some("Simple"));
+        }
+
+        let look = Look::read(
+            &home_with("theme = \"Simple\"\ntheme-icons = \"Default\"\n", None),
+            None,
+        );
+        assert_eq!(look.theme(wallpaper), Some("Simple"));
+        assert_eq!(
+            look.theme(icons),
+            Some("Default"),
+            "the newer, narrower key outranks the one it replaced"
+        );
+
+        let look = Look::read(&home_with("theme-wallpaper = \"Frosted\"\n", None), None);
+        assert_eq!(
+            look.theme(wallpaper),
+            None,
+            "a material this greeter has not got is no answer at all"
+        );
+    }
+
+    /// An account whose shell stands one of their own pictures behind
+    /// everything is greeted by the shell's own scene, in their accent.
+    ///
+    /// The value is understood and deliberately not carried out — the picture
+    /// is a file inside that account's home directory and this login screen
+    /// stands in front of every account on the machine. What must never happen
+    /// is the greeter refusing the whole look over it and coming up in
+    /// somebody else's colour.
+    #[test]
+    fn a_shell_showing_the_users_own_picture_keeps_the_rest_of_its_look() {
+        let home = home_with(
+            &format!(
+                "accent = \"Green\"\ntheme-wallpaper = \"{}\"\n\
+                 theme-icons = \"Simple\"\nwallpaper-file = \"/home/somebody/x.jpg\"\n",
+                accent::CUSTOM_WALLPAPER
+            ),
+            None,
+        );
+        let look = Look::read(&home, None);
+        assert_eq!(
+            look.theme(crate::visual::theme::Part::Wallpaper),
+            Some(accent::DEFAULT_THEME),
+            "the picture cannot be read here, so the scene is what stands in for it"
+        );
+        assert_eq!(look.accent(), Some("Green"));
+        assert_eq!(
+            look.theme(crate::visual::theme::Part::Icons),
+            Some("Simple")
+        );
+    }
+
+    /// A settings file larger than a login screen reads is no settings file.
+    #[test]
+    fn refuses_an_oversized_settings_file() {
+        let mut contents = String::from("accent = \"Blue\"\n#");
+        contents.push_str(&"x".repeat(MAX_BYTES as usize));
+        let look = Look::read(&home_with(&contents, None), None);
+        assert_eq!(look.accent(), None);
+    }
+
     /// The keyboard an account types on is carried like the accent is, and out
     /// of both files: the shell's own setting is what somebody chose on a page,
     /// and the compositor's `[input]` is what the session starts at on a
@@ -1504,6 +1629,59 @@ hdr = true
         fs::remove_dir_all(root).unwrap();
     }
 
+    /// A name squatted with something that is not a file cannot hold the login
+    /// screen.
+    ///
+    /// The published directory is writable by every account — that is the whole
+    /// design of it — so anybody can create `somebody-else.toml`, and what they
+    /// create does not have to be a file. A named pipe with no writer is what
+    /// `open` never comes back from, and the greeter reads the published look
+    /// of every account it enumerates as it starts: not the selected one, every
+    /// one. So one pipe, planted under any account's name, used to be a login
+    /// screen that never appeared, for everybody, until somebody found a
+    /// console.
+    ///
+    /// Run on a thread with a deadline, because a regression here does not fail
+    /// a test — it hangs the suite, which is exactly what it does to the screen.
+    #[test]
+    fn a_pipe_under_an_accounts_name_cannot_hold_the_login_screen() {
+        use std::sync::mpsc;
+        use std::time::Duration;
+
+        let root = scratch("squatted");
+        let path = root.join("alex.toml");
+        let name = std::ffi::CString::new(path.to_str().unwrap()).unwrap();
+        // SAFETY: `name` is a NUL-terminated path that outlives the call.
+        assert_eq!(unsafe { libc::mkfifo(name.as_ptr(), 0o644) }, 0);
+
+        // SAFETY: `getuid` cannot fail and touches no memory this owns.
+        let mine = unsafe { libc::getuid() };
+        let (answer, answered) = mpsc::channel();
+        let squatted = root.clone();
+        std::thread::spawn(move || {
+            // Both the owner it would refuse and the owner it would accept: the
+            // refusal has to happen at the door, not after a wait.
+            let _ = answer.send((
+                published_in(&squatted, "alex", mine),
+                published_in(&squatted, "alex", mine.wrapping_add(1)),
+            ));
+        });
+        assert_eq!(
+            answered.recv_timeout(Duration::from_secs(5)),
+            Ok((None, None)),
+            "the greeter waited on something that is not a file"
+        );
+
+        // A directory under the name does the same job less patiently, and is
+        // refused for the same reason: a name in this directory is not a file
+        // until the descriptor says it is one.
+        fs::remove_file(&path).unwrap();
+        fs::create_dir(&path).unwrap();
+        assert_eq!(published_in(&root, "alex", mine), None);
+
+        fs::remove_dir_all(root).unwrap();
+    }
+
     /// What the greeter's compositor is started with, from an account's
     /// settings.
     ///
@@ -1552,6 +1730,70 @@ hdr = true
         );
 
         fs::remove_dir_all(home).unwrap();
+    }
+
+    /// One account must not be able to leave everybody else without a login
+    /// screen.
+    ///
+    /// `enabled = false` is the one published setting that decides whether the
+    /// screen exists rather than what it looks like, and the directory it
+    /// arrives in is one every account writes into. A look that turns off every
+    /// connector on the machine — published deliberately, or left behind by a
+    /// desk that has since been rearranged — used to be carried into the
+    /// greeter's own compositor word for word, and the compositor does what it
+    /// is told: "output disabled by config, leaving it dark".
+    ///
+    /// So it is not carried. Everything else about those two displays still is,
+    /// which is the other half of the test: this is one setting withheld, not
+    /// the login screen giving up on an account's displays.
+    #[test]
+    fn a_published_look_cannot_turn_the_login_screens_displays_off() {
+        // Every connector the account has settings for, turned off — which on
+        // a machine with these two screens is every screen it has.
+        let off = SHELL
+            .replace(
+                "[display.TEST-OUT-1]",
+                "[display.TEST-OUT-1]\nenabled = false",
+            )
+            .replace(
+                "[display.TEST-OUT-2]",
+                "[display.TEST-OUT-2]\nenabled = false",
+            );
+        let look = Look::read(&home_with(&off, None), None);
+        assert_eq!(
+            look.display["TEST-OUT-1"].enabled,
+            Some(false),
+            "the setting is read and kept — this is about what is passed on"
+        );
+
+        let document = look
+            .compositor_config("/usr/bin/console-experience-desktop-manager", None)
+            .unwrap();
+        assert!(
+            !document.contains("enabled"),
+            "the greeter's compositor was told to leave a connector dark:\n{document}"
+        );
+
+        let config: toml::Table = document.parse().expect("a compositor config is TOML");
+        let outputs = config["output"].as_array().expect("output blocks");
+        for name in ["TEST-OUT-1", "TEST-OUT-2"] {
+            let output = outputs
+                .iter()
+                .find(|output| output["name"].as_str() == Some(name))
+                .unwrap_or_else(|| panic!("no [[output]] for {name}"));
+            assert!(
+                output.get("enabled").is_none(),
+                "{name} still carries an enabled flag"
+            );
+        }
+        // The rest of what those screens were set to is untouched.
+        assert_eq!(
+            outputs
+                .iter()
+                .find(|output| output["name"].as_str() == Some("TEST-OUT-1"))
+                .and_then(|output| output["hdr"].as_bool()),
+            Some(true)
+        );
     }
 
     /// A day of the year with a long night on it, so a machine built in
@@ -1709,6 +1951,44 @@ hdr = true
             assert_eq!(look.night_light_longitude, None, "{longitude:?}");
             assert_eq!(look.here(), zone);
         }
+    }
+
+    /// A published look says which town its owner is in, and not which street.
+    ///
+    /// The file is world-readable, because a greeter that runs as nobody in
+    /// particular has to be able to read it, and every account on the machine
+    /// can therefore read every other account's. These two numbers are the only
+    /// thing in it that is about a person rather than about a desktop. A tenth
+    /// of a degree is about eleven kilometres and moves sunset by under a
+    /// minute, which is nothing to a login screen and a great deal to whoever
+    /// the coordinates belong to.
+    #[test]
+    fn a_published_place_is_a_town_rather_than_an_address() {
+        let exact = Look {
+            night_light_latitude: Some(52.237_049),
+            night_light_longitude: Some(21.017_532),
+            ..Look::default()
+        }
+        .sane();
+        assert_eq!(exact.night_light_latitude, Some(52.2));
+        assert_eq!(exact.night_light_longitude, Some(21.0));
+
+        // And it still names a place, so the sun is still worked out for
+        // somewhere rather than falling back to the zone.
+        assert_eq!(exact.here(), crate::sun::Location::exact(52.2, 21.0));
+        assert_ne!(exact.here(), Look::default().here());
+
+        // The rounding cannot put a coordinate off the earth on its way past
+        // the check that it is on it.
+        let edge = Look {
+            night_light_latitude: Some(-89.98),
+            night_light_longitude: Some(179.97),
+            ..Look::default()
+        }
+        .sane();
+        assert_eq!(edge.night_light_latitude, Some(-90.0));
+        assert_eq!(edge.night_light_longitude, Some(180.0));
+        assert!(edge.here().is_some());
     }
 
     /// The two things a published file names that have a shape rather than a

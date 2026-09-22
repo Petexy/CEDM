@@ -124,14 +124,51 @@ the colour on its first frame.
 
 The unprivileged greeter never writes `/var/lib`.
 
+It also turns off its own core dumps and its own ptrace-ability as it starts —
+`RLIMIT_CORE` at nothing, `PR_SET_DUMPABLE` at zero — because for the length of
+one login it is a process with a password in it, and by default any process
+running as the same account may read another's memory. It is not alone under
+`cedm-greeter`: the compositor that gives it a seat runs there too, and so does
+the session bus beside it. Neither limit reaches the session that follows, which
+greetd starts itself, as root, after this process has exited.
+
+This is also why CEDM's service unit is **not** sandboxed and must not be. That
+unit is greetd, not the greeter, and greetd forks every user session on the
+machine out of itself: `NoNewPrivileges=yes` or `PrivateTmp=yes` there would be
+a restriction on somebody's whole desktop rather than on their login screen. A
+limit meant for the thirty seconds somebody spends typing must not become a
+limit on the eight hours they spend working. GDM's unit contains none of them
+either. The confinement belongs one level down, on the process that is actually
+the login screen, and that is where it is.
+
 ## What a login screen can know about an account
 
 **Nothing it has to walk into a home directory for.** Homes are `0700` on most
 distributions and `0710` on some, and `cedm-greeter` is in nobody's group, so an
-account's own settings are simply unreadable — which is the boundary, not an
-obstacle to it. [`src/faces.rs`](../src/faces.rs) has always said so about
-avatars: the greeter reads the copy `accounts-daemon` published under
-`/var/lib/AccountsService/icons` and never `~/.face`.
+account's own settings are usually unreadable anyway — but the boundary is that
+the greeter does not open them, not that it would fail if it tried. A home an
+administrator has opened up, or a development machine, must not be a machine
+where an account decides what the login screen reads. [`src/faces.rs`](../src/faces.rs)
+has always said so about avatars: the greeter reads the copy `accounts-daemon`
+published under `/var/lib/AccountsService/icons` and never `~/.face`. As of the
+security pass this is true of every other setting too — the accent, both halves
+of the theme, the keyboard, the displays, the sound device — each of which reads
+the published copy and nothing else. GDM draws the same line.
+
+**And it opens what it does read through one door.**
+[`src/reading.rs`](../src/reading.rs) is the only way the greeter opens a file
+somebody else can write, and it refuses three things: a symbolic link, anything
+that is not a plain file, and a plain file the expected account does not own. It
+refuses the second of those *without waiting*, which is the part that is not
+obvious — a name can be a named pipe, and opening one for reading blocks until
+a writer arrives. Nothing on this side of a login may be able to wait forever.
+
+**What it decodes is bounded before it allocates.** An avatar is a PNG from
+outside this program, and a PNG's header names its own size: fifty-seven bytes
+can claim 32768 by 32768, which is a four-gigabyte allocation asked for before
+there is any image data to contradict it. The picture's dimensions and its
+decoded size are checked against a fixed budget first, and the decoder is given
+a budget of its own.
 
 The accent had no such copy, and the result was a login screen that drew every
 account in the default purple however its shell was set. So each account
