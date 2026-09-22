@@ -138,6 +138,65 @@ const KEY_CAP_FUNCTION: f32 = 14.0;
 const BOARD_PADDING: f32 = 20.0;
 const BOARD_MARGIN: f32 = 34.0;
 
+/// The row in the corner of the wallpaper that says what the buttons do.
+///
+/// **Every number below is `lxb-desktop`'s own, and has to be.** This row and
+/// the one on the shell's start screen are the same row seen a second apart, on
+/// two programs drawing on the same wallpaper either side of a handover — so
+/// they are not merely alike, they are the same drawing. `START_HINT_GLYPH`,
+/// `START_HINT_LABEL`, `START_HINT_GAP` and `START_HINT_STEP` there; a button
+/// bigger than the word beside it by half again, because a face-button cluster
+/// is mostly air and at the word's own size it reads as a smudge rather than as
+/// a picture of a pad.
+const LEGEND_GLYPH: f32 = 34.0;
+const LEGEND_LABEL: f32 = 19.0;
+const LEGEND_GAP: f32 = 8.0;
+const LEGEND_STEP: f32 = 24.0;
+/// How far in from the edge it hugs, and the line it is written on measured up
+/// from the bottom of the display: `CORNER_INSET` and `corner_line` there.
+///
+/// The shell's line is the mirror of the one its clock and the marks beside it
+/// stand on in the opposite corner — `CORNER_TOP` plus `MARK_LINE` of
+/// `CORNER_CLOCK`, which is the middle of the letters rather than the middle of
+/// the line box they sit in. This greeter's own clock is not in a corner and
+/// has no line to mirror, so what is carried across is the answer: the row
+/// hugs the bottom-right of the wallpaper by exactly what it hugs it by one
+/// press later.
+const LEGEND_INSET: f32 = 48.0;
+const LEGEND_CORNER_TOP: f32 = 36.0;
+const LEGEND_CORNER_MARK: f32 = 24.0;
+const LEGEND_MARK_LINE: f32 = 0.60;
+/// How solid it is written: `CORNER_INK` there, and short of full for that
+/// constant's reason — this is writing on the wallpaper rather than on a pane
+/// that could hold it up.
+const LEGEND_INK: f32 = 0.85;
+/// Where a word sits against the middle of the row, and how tall a box it is
+/// given, as multiples of its own size.
+///
+/// `lxb-desktop`'s `legend_row` writes the run at
+/// `middle - size * 0.5 - size * 0.12` and `shape_texts` gives it a box
+/// `size * 2.0` tall, and **both programs lay a run out with the same
+/// machinery** — `Metrics::new(size, size * 1.25)`, the buffer sized to the
+/// box, and the box's top handed to glyphon as the area's top. So those two
+/// numbers put the ink in the same place in both, and any others put the word
+/// off the middle of the button beside it. It was drawn on a box of its own
+/// first, centred, and the word rode visibly high: a line box carries its
+/// slack below the baseline, so centring the box is not centring the letters.
+const LEGEND_BASELINE: f32 = 0.62;
+const LEGEND_BOX: f32 = 2.0;
+
+/// How large the row is drawn on a display this tall — `guide_scale` in
+/// `lxb-desktop`, clamp and all.
+///
+/// **Not [`Metrics::scale`]**, which is this greeter's own and is measured
+/// against a 1280x720 canvas. The shell measures this row against the height of
+/// a 1080-line display alone, and a row scaled the other way is half again the
+/// size of the one the next screen draws. The two would be recognisably
+/// different rows, which is the one thing they may not be.
+fn legend_scale(height: f32) -> f32 {
+    (height / 1080.0).clamp(0.6, 2.5)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Users,
@@ -318,6 +377,9 @@ pub struct View<'a> {
     pub clock: crate::clock::Clock,
     /// The open session menu, if one is open.
     pub session_menu: Option<Menu>,
+    /// Whether this screen says what its buttons do, and which control it draws
+    /// a picture of them from.
+    pub legend: Legend,
 }
 
 /// The session menu's state, as far as drawing it is concerned.
@@ -332,6 +394,40 @@ pub struct Menu {
     /// Whether it may still be pressed. A menu that is leaving is still drawn
     /// and must not still be answerable.
     pub interactive: bool,
+}
+
+/// What the legend in the corner of the wallpaper is drawn from, and whether it
+/// is drawn at all.
+///
+/// Two facts, and neither is the scene's to work out. Both are the account's:
+/// whether its shell writes what its buttons do, and which control it last
+/// reached for — see [`crate::look::Look::button_hints`] and
+/// [`crate::look::Look::pad_in_hand`], which read them out of the copy that
+/// account published. The second is only the *first* answer; the greeter has
+/// its own eyes, and the first press it sees settles it.
+///
+/// Everything else the row says — which pairs are in it — is a question about
+/// the screen in front of the user, and [`column_hints`] asks it of the view.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Legend {
+    /// Whether the row is written at all. Off at Settings > System > Button
+    /// hints, in the session this screen opens.
+    pub shown: bool,
+    /// Whether the user's hands are on a pad rather than on a keyboard.
+    pub pad: bool,
+}
+
+impl Default for Legend {
+    /// On, and a console. The same default the shell keeps: a machine with
+    /// nobody's habits recorded yet is a machine in front of a sofa, and a
+    /// settings file written before the row existed is not somebody having
+    /// turned it off.
+    fn default() -> Self {
+        Self {
+            shown: true,
+            pad: true,
+        }
+    }
 }
 
 /// Compose the login screen on every display the greeter has been given.
@@ -393,6 +489,7 @@ fn compose(output: &mut Output, view: &View<'_>, width: f32, height: f32) {
     build_identity(output, view, layout, metrics, pulse, fade, interactive);
     build_session(output, view, layout, metrics, pulse, fade, interactive);
     build_footer(output, view, layout, metrics, pulse, fade, interactive);
+    build_legend(output, view, layout, fade);
     build_back(output, view, layout, metrics, pulse, fade, interactive);
 
     // Only the middle of the column changes between screens, so only the
@@ -740,6 +837,12 @@ struct Layout {
     keyboard_toggle: [f32; 4],
     footer_row: [f32; 4],
     footer_mark: f32,
+    /// The corner the legend is laid out in — its right-hand end is where the
+    /// row starts and its left-hand end is as far as the row may reach — and
+    /// how large its pieces are drawn before anything is made to fit. See
+    /// [`build_legend`].
+    legend_row: [f32; 4],
+    legend_size: LegendSize,
     back: [f32; 4],
     clock: [f32; 4],
     date: [f32; 4],
@@ -749,6 +852,15 @@ struct Layout {
     /// The footer goes first, because it is the row nearest the board and the
     /// one nothing in an answer depends on.
     footer_visible: bool,
+    /// Whether the corner the legend is written in is a corner: there is
+    /// wallpaper beside the column to write on, and the on-screen keyboard has
+    /// not reached it. See [`Layout::new`].
+    ///
+    /// About the corner and **not** about the setting. Nothing in the column
+    /// is measured against this row — it is not in the column — so the setting
+    /// moves nothing at all: the carousel can walk from an account that writes
+    /// it to one that does not without a pixel of the interface shifting.
+    legend_room: bool,
 }
 
 impl Layout {
@@ -795,7 +907,8 @@ impl Layout {
         } else {
             76.0 * metrics.scale
         };
-        let footer_y = column[1] + column[3] - metrics.safe - footer_h;
+        let column_foot = column[1] + column[3] - metrics.safe;
+        let footer_y = column_foot - footer_h;
         let footer_visible = !view.footer.is_empty() && board_top > footer_y + footer_h * 0.35;
 
         // The identity sits above the middle rather than on it: the column is
@@ -970,6 +1083,57 @@ impl Layout {
             (clock_size * 0.24).max(18.0),
         ];
 
+        // The legend stands in the bottom-right corner of the *wallpaper*,
+        // opposite the column, which is where `lxb-desktop` writes its own. The
+        // two things this screen puts on the wallpaper are then the hour and
+        // the row of buttons, one above the other on the half of the display
+        // the column is not standing on.
+        //
+        // **Hugging its corner by the shell's own numbers, at the shell's own
+        // size** — see [`LEGEND_INSET`] and [`legend_scale`]. This row and the
+        // one the start screen draws a second later are the same row on the
+        // same wallpaper, so nothing about how it is drawn is this program's to
+        // choose.
+        let legend_scale = legend_scale(metrics.height);
+        let legend_h = LEGEND_GLYPH * legend_scale;
+        let legend_right = metrics.width - LEGEND_INSET * legend_scale;
+        // The middle of the row, and then the band around it: the shell writes
+        // it on `corner_line` measured up from the bottom of the display, and a
+        // button is drawn centred on that line.
+        let legend_middle = metrics.height
+            - (LEGEND_CORNER_TOP + LEGEND_CORNER_MARK * LEGEND_MARK_LINE) * legend_scale;
+        let legend_y = legend_middle - legend_h * 0.5;
+        // How far left it may reach. The row is laid out from its right-hand
+        // end leftwards and has to be told where to stop, and there are two
+        // things on that side of the screen to stop at.
+        //
+        // The column is one: the row is deliberately not written on the glass,
+        // so the glass is where its room ends. The on-screen keyboard is the
+        // other, and it is the bottom row's own rule asked a finer way — the
+        // board is drawn in the middle of the display and is narrower than a
+        // wide one, so the room left beside it is a real distance rather than a
+        // yes or a no. On a television there is most of a screen of it and the
+        // row stands at full size while somebody types; on a 16:9 desktop panel
+        // there is enough for a smaller one; on something smaller still there
+        // is none, and [`build_legend`] writes nothing rather than printing
+        // over the keys.
+        let beside_the_column = column[0] + column[2] + float;
+        let legend_left = match view.keyboard {
+            Some(_) => {
+                let [board_x, board_y, board_w, board_h] =
+                    keyboard_panel_rect(metrics.width, metrics.height);
+                match board_y < legend_y + legend_h && board_y + board_h > legend_y {
+                    true => beside_the_column.max(board_x + board_w + float),
+                    false => beside_the_column,
+                }
+            }
+            None => beside_the_column,
+        };
+        // And a display too narrow for the clock has no wallpaper left to write
+        // on at all: the column is the whole screen, and the corner this row
+        // lives in is the corner the bottom row's last button is drawn in.
+        let legend_room = split && legend_right > legend_left;
+
         Self {
             column,
             content_x,
@@ -989,11 +1153,24 @@ impl Layout {
             } else {
                 (38.0 * metrics.scale).clamp(metrics.px(30.0), metrics.px(48.0))
             },
+            legend_row: [
+                legend_left,
+                legend_y,
+                (legend_right - legend_left).max(0.0),
+                legend_h,
+            ],
+            legend_size: LegendSize {
+                glyph: legend_h,
+                label: LEGEND_LABEL * legend_scale,
+                gap: LEGEND_GAP * legend_scale,
+                step: LEGEND_STEP * legend_scale,
+            },
             back,
             clock,
             date,
             split,
             footer_visible,
+            legend_room,
         }
     }
 }
@@ -1491,6 +1668,315 @@ fn build_footer(
             });
         }
     }
+}
+
+// --- the legend: what the buttons do ---------------------------------------
+
+/// One thing a button does, as a legend says it: the word, and a picture of the
+/// button itself.
+///
+/// **Drawn rather than lettered, and named by which control is in hand.** The
+/// same act is South on a pad and Enter on a keyboard, and there is no wording
+/// that covers both without naming neither — "press A" is wrong on a
+/// PlayStation pad and meaningless to somebody typing. So the row says the one
+/// the user's hands are actually on; see [`Legend::pad`], which is what
+/// answers that, and `lxb-desktop`'s `Hint`, where the same rule is written
+/// down for the session this screen opens.
+struct Hint {
+    label: &'static str,
+    slot: u32,
+}
+
+/// How large a legend is drawn: the picture of the button, the word beside it,
+/// the air between the two, and the air between one pair and the next.
+#[derive(Debug, Clone, Copy)]
+struct LegendSize {
+    glyph: f32,
+    label: f32,
+    gap: f32,
+    step: f32,
+}
+
+impl LegendSize {
+    /// The same row drawn `fit` of its size — see [`legend_that_fits`].
+    ///
+    /// All four together, because a button drawn beside a word half its height
+    /// would read as a different row rather than as a smaller one.
+    fn shrunk(self, fit: f32) -> Self {
+        Self {
+            glyph: self.glyph * fit,
+            label: self.label * fit,
+            gap: self.gap * fit,
+            step: self.step * fit,
+        }
+    }
+}
+
+/// How wide a legend's word is, per character, before it has been shaped.
+///
+/// The row is laid out from its right-hand end leftwards and nothing here can
+/// measure a run — shaping happens a pass later, in the renderer — so each word
+/// is given a box estimated now and set right-aligned inside it. That makes the
+/// estimate harmless in one direction and fatal in the other: a box wider than
+/// the word only leaves air to its left, where there is nothing to collide
+/// with, and a box narrower than the word is a word wrapped onto a second line
+/// this row has no room for.
+///
+/// So it is generous. `lxb-desktop`'s own number, measured there against every
+/// word its legends carry: the widest short word in Latin or Cyrillic is
+/// *Параметры* at 0.61 em a character, and at the 0.58 this was first tried at
+/// the Russian *Выбрать* did not fit the room it had been given.
+/// [`tests::no_translation_overflows_the_place_it_is_written`] is what holds
+/// these three words to it, in all ten languages.
+const LEGEND_ADVANCE: f32 = 0.66;
+
+/// The smallest a legend may be shrunk to make it fit — see
+/// [`legend_that_fits`].
+///
+/// Eleven twentieths. Below that the word beside a button is smaller than the
+/// line under the field and the button itself is a bead, which is a row nobody
+/// reads from a sofa. A row that would need less than this has one pair too
+/// many for the column rather than one size too large.
+const LEGEND_SMALLEST: f32 = 0.55;
+
+/// Roughly how wide `label` will be at `size`, before it has been shaped.
+///
+/// [`LEGEND_ADVANCE`] per character, except that a Han, kana, Hangul or
+/// fullwidth character is a full em: every one of them is drawn on a square,
+/// which is half as wide again as the Latin estimate, and this greeter writes
+/// all three of these words in Han. The estimate stays an estimate — a
+/// Devanagari word carries combining marks that advance nothing and comes out
+/// over-estimated, which is the harmless direction.
+fn legend_word_width(label: &str, size: f32) -> f32 {
+    label
+        .chars()
+        .map(|character| {
+            let wide = matches!(character as u32,
+                0x1100..=0x115F // Hangul Jamo
+                | 0x2E80..=0x303E // CJK radicals, kana marks, CJK punctuation
+                | 0x3041..=0x33FF // kana, bopomofo, Hangul compatibility, enclosed CJK
+                | 0x3400..=0x4DBF // CJK extension A
+                | 0x4E00..=0x9FFF // CJK unified ideographs
+                | 0xA000..=0xA4CF // Yi
+                | 0xAC00..=0xD7A3 // Hangul syllables
+                | 0xF900..=0xFAFF // CJK compatibility ideographs
+                | 0xFE30..=0xFE4F // CJK compatibility forms
+                | 0xFF00..=0xFF60 // fullwidth forms
+                | 0xFFE0..=0xFFE6
+                | 0x20000..=0x3FFFD); // CJK extensions B onward
+            size * if wide { 1.0 } else { LEGEND_ADVANCE }
+        })
+        .sum()
+}
+
+/// How wide a row comes out: each button, the air beside it, the word as it has
+/// been estimated, and the air between one pair and the next.
+///
+/// The estimate rather than a true width, because the estimate is what the row
+/// is *laid out* from — see [`legend_word_width`]. So this is exactly the room
+/// the row will take rather than a guess at it.
+fn legend_ink(hints: &[Hint], size: LegendSize) -> f32 {
+    hints
+        .iter()
+        .map(|hint| size.glyph + size.gap + legend_word_width(hint.label, size.label))
+        .sum::<f32>()
+        + size.step * hints.len().saturating_sub(1) as f32
+}
+
+/// The row as it can actually be drawn in `room`: how much of it, and at what
+/// size.
+///
+/// **Smaller first, shorter second.** Each of the four numbers is linear in the
+/// factor, so the size is one division rather than a search. Only when even
+/// [`LEGEND_SMALLEST`] will not hold the row does it give up a pair, and the
+/// pair it gives up is the **last**: the row is built with the act it is about
+/// at the front and whatever else can be done at the back, so the back is where
+/// the least is lost. It never gives up the last one standing, because a legend
+/// of nothing is a corner that has stopped explaining itself.
+///
+/// It exists because this row is laid out from its right-hand end leftwards and
+/// knows nothing about what is beside it. The shell learned that in a sidebar
+/// 280 points wide, where three pairs printed out through the panel's edge in
+/// every language; here what is beside it is the column's glass, and — while
+/// somebody is typing — the keys of the on-screen board.
+fn legend_that_fits(mut hints: Vec<Hint>, size: LegendSize, room: f32) -> (Vec<Hint>, LegendSize) {
+    loop {
+        let ink = legend_ink(&hints, size);
+        let fit = match ink <= room || ink <= 0.0 {
+            true => 1.0,
+            false => (room / ink).max(LEGEND_SMALLEST),
+        };
+        let cut = size.shrunk(fit);
+        if hints.len() <= 1 || legend_ink(&hints, cut) <= room + 0.5 {
+            return (hints, cut);
+        }
+        hints.pop();
+    }
+}
+
+/// Lay a legend out from `right` leftwards, centred on `middle`, and say where
+/// its left-hand end came out.
+///
+/// Right to left because of what a legend is made of: each pair is a word and
+/// then a picture, the words are different lengths, and nothing here can
+/// measure a run before it is shaped. Built from the right, the pair nearest
+/// the margin lands exactly on it whatever the words turn out to measure, and
+/// only the far end of the row moves as a pair comes and goes.
+fn legend_row(
+    output: &mut Output,
+    hints: &[Hint],
+    right: f32,
+    middle: f32,
+    size: LegendSize,
+    glyph_ink: [f32; 4],
+    label_ink: [f32; 4],
+) -> f32 {
+    let mut at = right;
+    for hint in hints.iter().rev() {
+        glyph(
+            &mut output.scene,
+            hint.slot,
+            [
+                at - size.glyph,
+                middle - size.glyph * 0.5,
+                size.glyph,
+                size.glyph,
+            ],
+            1.0,
+            glyph_ink,
+        );
+        let word = legend_word_width(hint.label, size.label);
+        let ends = at - size.glyph - size.gap;
+        text(
+            &mut output.scene,
+            hint.label,
+            // The shell's own placement, to the number — see [`LEGEND_BASELINE`]
+            // and [`LEGEND_BOX`]. The box's top rather than its middle is what
+            // the letters are hung from, in both programs.
+            [
+                ends - word,
+                middle - size.label * LEGEND_BASELINE,
+                word,
+                size.label * LEGEND_BOX,
+            ],
+            size.label,
+            label_ink,
+            false,
+            // Right-aligned, which is what makes the estimate above harmless:
+            // the word ends where it is told to whatever it really measures.
+            TextAlign::Right,
+        );
+        at = ends - word - size.step;
+    }
+    at
+}
+
+/// What this screen's buttons do, read left to right.
+///
+/// Three acts, and they are the three somebody has to be told: the one that
+/// takes what the light is standing on, the one that raises the board to answer
+/// with, and the way back out. Nothing about moving — the light is already
+/// somewhere and the thing it is standing on is lit.
+///
+/// **Select never goes.** It is the press this screen exists for, and it does
+/// something wherever the light is: a profile, the session badge, a key of the
+/// board, a row of the menu, a button on the bottom row.
+///
+/// **Keyboard comes and goes with the field, and only on a pad.** There is
+/// nothing to type into on the screen that chooses an account, so the button
+/// does nothing there — and `lxb-desktop`'s rule is that a legend naming a
+/// button that does nothing is worse than naming none. Nothing at all is
+/// offered to somebody at a keyboard: the on-screen board is a picture of the
+/// keys already under their hands, and no key on this screen raises it.
+///
+/// **Back comes and goes with the way out**, which is [`Phase::cancellable`] —
+/// the same question [`build_back`] draws the arrow at the top of the column
+/// from, asked of the same phase, so the word at the foot and the arrow at the
+/// head cannot disagree about whether there is one.
+fn column_hints(view: &View<'_>, pad: bool) -> Vec<Hint> {
+    let one = |label, on_a_pad, otherwise| Hint {
+        label,
+        slot: if pad { on_a_pad } else { otherwise },
+    };
+    let text = i18n::text();
+    let mut hints = vec![one(
+        text.hint_select,
+        visual::PAD_SOUTH_SLOT,
+        visual::KEY_ENTER_SLOT,
+    )];
+    if pad
+        && matches!(
+            view.phase,
+            Phase::Username { .. } | Phase::Authenticating { .. }
+        )
+    {
+        hints.push(Hint {
+            label: text.hint_keyboard,
+            slot: visual::PAD_NORTH_SLOT,
+        });
+    }
+    if view.phase.cancellable() {
+        hints.push(one(
+            text.hint_back,
+            visual::PAD_EAST_SLOT,
+            visual::KEY_ESCAPE_SLOT,
+        ));
+    }
+    hints
+}
+
+/// The row that says what the buttons do, in the bottom-right corner of the
+/// wallpaper.
+///
+/// Out on the wallpaper and opposite the column, which is where `lxb-desktop`
+/// writes its own — the corner opposite the thing the screen is about. That is
+/// the whole reason it is there rather than at the foot of the column: a hand
+/// that has learnt where to look for this row on the start screen must not have
+/// to learn it again on the screen one press before it, and the two screens are
+/// either side of a handover that is otherwise seamless.
+///
+/// Written in the shell's own two inks at the shell's own strength — the mark
+/// in `text` and the word in `text_soft`, both at [`LEGEND_INK`], which is
+/// short of full because this is writing on the wallpaper rather than on a pane
+/// that could hold it up.
+fn build_legend(output: &mut Output, view: &View<'_>, layout: Layout, fade: f32) {
+    if !layout.legend_room || !view.legend.shown {
+        return;
+    }
+    // **An open session menu takes the row away.** `lxb-desktop`'s rule for a
+    // context menu, and it is the right one twice over here: while that panel
+    // is up the column behind it has been dimmed and stepped back, because it
+    // is not what is being read — and two of these three buttons are about the
+    // panel now rather than about the column, which is a row that would have
+    // to be two rows to stay true. The menu is small, it is the only thing on
+    // the screen, and its list is its own instruction.
+    if view.session_menu.is_some_and(|menu| menu.interactive) {
+        return;
+    }
+    let hints = column_hints(view, view.legend.pad);
+    if hints.is_empty() {
+        return;
+    }
+    let palette = theme::theme();
+    let [row_x, row_y, row_w, row_h] = layout.legend_row;
+    let (hints, size) = legend_that_fits(hints, layout.legend_size, row_w);
+    // The one case [`legend_that_fits`] cannot answer: it never gives up the
+    // last pair standing, because a legend of nothing is a corner that has
+    // stopped explaining itself — but a corner with no room left in it *is*
+    // nothing, and one pair printed over the keyboard beside it would be worse
+    // than the blank corner. This is where the row gives up.
+    if legend_ink(&hints, size) > row_w + 0.5 {
+        return;
+    }
+    legend_row(
+        output,
+        &hints,
+        row_x + row_w,
+        row_y + row_h * 0.5,
+        size,
+        palette.text.a(LEGEND_INK * fade),
+        palette.text_soft.a(LEGEND_INK * fade),
+    );
 }
 
 /// The way out of an attempt that has already been opened.
@@ -2769,6 +3255,11 @@ mod tests {
             now: crate::clock::Now::read(),
             clock: crate::clock::Clock::default(),
             session_menu: None,
+            // Written, and with a pad in hand, which is the default a machine
+            // nobody has published anything for comes up with — and the one
+            // that puts every word of the row into the scene, so that the
+            // checks on what this screen says cover them all.
+            legend: Legend::default(),
         }
     }
 
@@ -4225,6 +4716,658 @@ mod tests {
         assert!((pushed.rect[1] + pushed.rect[3] * 0.5 - cy).abs() < 1e-3);
     }
 
+    /// The cells of the legend's buttons and the boxes its words were laid out
+    /// in, read **left to right** as somebody reads the row.
+    ///
+    /// Sorted rather than taken in scene order, because the row is laid out
+    /// from its right-hand end leftwards: what goes into the scene first is
+    /// what is read last, and a test asserting on that order would be
+    /// asserting on the arithmetic rather than on the row.
+    ///
+    /// Found by the band it stands in and not by what it says. Two runs on this
+    /// screen can carry the same word — English writes `Back` on the way out
+    /// *and* on the board's own backspace key — so a legend picked out of the
+    /// scene by its words alone would pick up half the keyboard the moment the
+    /// board came up.
+    fn legend_in(output: &Output, band: [f32; 4]) -> (Vec<u32>, Vec<Text>) {
+        let within = |rect: [f32; 4]| {
+            let middle = rect[1] + rect[3] * 0.5;
+            rect[0] >= band[0] - 1.0 && middle >= band[1] - 1.0 && middle <= band[1] + band[3] + 1.0
+        };
+        let mut cells = output
+            .scene
+            .quads
+            .iter()
+            .filter(|quad| {
+                [
+                    visual::PAD_SOUTH_SLOT,
+                    visual::PAD_EAST_SLOT,
+                    visual::PAD_NORTH_SLOT,
+                    visual::KEY_ENTER_SLOT,
+                    visual::KEY_ESCAPE_SLOT,
+                ]
+                .contains(&quad.slot)
+                    && within(quad.rect)
+            })
+            .map(|quad| (quad.rect[0], quad.slot))
+            .collect::<Vec<_>>();
+        let strings = i18n::text();
+        let words = [
+            strings.hint_select,
+            strings.hint_keyboard,
+            strings.hint_back,
+        ];
+        let mut said = output
+            .scene
+            .texts
+            .iter()
+            .filter(|text| words.contains(&text.content.as_str()) && within(text.rect))
+            .cloned()
+            .collect::<Vec<_>>();
+        cells.sort_by(|a, b| a.0.total_cmp(&b.0));
+        said.sort_by(|a, b| a.rect[0].total_cmp(&b.rect[0]));
+        (cells.into_iter().map(|(_, slot)| slot).collect(), said)
+    }
+
+    /// The row says what the buttons do, and names no button that does nothing.
+    ///
+    /// Three acts and three rules, and each of them is a press that either goes
+    /// somewhere or does not. Select always does. The board is raised by the
+    /// pad's north button only where there is a field to type into, and by
+    /// nothing at all on a keyboard — a picture of the keys already under
+    /// somebody's hands is not an offer to them. And the way out is there
+    /// exactly where [`Phase::cancellable`] says there is one, which is the
+    /// same question the arrow at the head of the column is drawn from.
+    #[test]
+    fn the_legend_names_the_buttons_that_do_something_and_no_others() {
+        let users = [user("Alex")];
+        let sessions = [session("LineXinBar")];
+        i18n::with_language(i18n::Language::English, || {
+            let strings = i18n::text();
+            let said = |phase, pad| {
+                let mut one = view(&users, &sessions, phase, Focus::Prompt, FOOTER.as_slice());
+                one.legend = Legend { shown: true, pad };
+                let band = Layout::new(Metrics::new(1600.0, 900.0), &one).legend_row;
+                let output = one_display(one, 1600.0, 900.0);
+                let (cells, words) = legend_in(&output, band);
+                (
+                    cells,
+                    words
+                        .iter()
+                        .map(|text| text.content.clone())
+                        .collect::<Vec<_>>(),
+                )
+            };
+
+            // Choosing an account: there is nothing to type into and nothing to
+            // go back out of, so there is one press worth naming.
+            let (cells, words) = said(Phase::Choose, true);
+            assert_eq!(words, [strings.hint_select]);
+            assert_eq!(cells, [visual::PAD_SOUTH_SLOT]);
+
+            // Answering PAM on a pad: all three, in the order they are read.
+            let asking = Phase::Authenticating {
+                prompt: strings.password,
+                secret: true,
+                input: "",
+            };
+            let (cells, words) = said(asking, true);
+            assert_eq!(
+                words,
+                [
+                    strings.hint_select,
+                    strings.hint_keyboard,
+                    strings.hint_back
+                ]
+            );
+            assert_eq!(
+                cells,
+                [
+                    visual::PAD_SOUTH_SLOT,
+                    visual::PAD_NORTH_SLOT,
+                    visual::PAD_EAST_SLOT
+                ]
+            );
+
+            // The same screen with a keyboard in hand: the same two acts a
+            // keyboard can do, drawn as the two keys that do them, and no offer
+            // of a picture of a keyboard to somebody sitting at one.
+            let (cells, words) = said(asking, false);
+            assert_eq!(words, [strings.hint_select, strings.hint_back]);
+            assert_eq!(
+                cells,
+                [visual::KEY_ENTER_SLOT, visual::KEY_ESCAPE_SLOT],
+                "a keyboard user is named a keyboard's keys"
+            );
+
+            // And the word at the foot agrees with the arrow at the head about
+            // whether there is a way out at all, on every screen there is.
+            for phase in [
+                Phase::Choose,
+                Phase::Username {
+                    input: "",
+                    error: None,
+                },
+                asking,
+                Phase::Busy(strings.checking),
+                Phase::Error(strings.incorrect_password),
+            ] {
+                let (_, words) = said(phase, true);
+                assert_eq!(
+                    words.contains(&strings.hint_back.to_string()),
+                    phase.cancellable(),
+                    "{phase:?}: the legend and the back arrow disagree",
+                );
+            }
+        });
+    }
+
+    /// The setting takes the row away and moves nothing else.
+    ///
+    /// `button-hints` belongs to the account being looked at and the carousel
+    /// walks between accounts, so a screen that laid itself out differently
+    /// with the row off would rearrange itself as the selection moved — the
+    /// avatar, the field and the bottom row all shifting because the next
+    /// person along had switched a preference. Nothing is measured against the
+    /// row: it stands on the wallpaper, in the corner opposite the column, and
+    /// the corner is where it is whether or not anything is written in it.
+    #[test]
+    fn the_setting_takes_the_row_away_and_the_column_does_not_move() {
+        let users = [user("Alex"), user("Sam")];
+        let sessions = [session("LineXinBar")];
+        let laid_out = |shown| {
+            let mut one = view(
+                &users,
+                &sessions,
+                Phase::Choose,
+                Focus::Users,
+                FOOTER.as_slice(),
+            );
+            one.legend = Legend { shown, pad: true };
+            let layout = Layout::new(Metrics::new(1600.0, 900.0), &one);
+            (layout, one_display(one, 1600.0, 900.0))
+        };
+        let (written, with_row) = laid_out(true);
+        let (silent, without) = laid_out(false);
+
+        let (cells, words) = legend_in(&with_row, written.legend_row);
+        assert!(
+            !cells.is_empty() && !words.is_empty(),
+            "the row was written"
+        );
+        let (cells, words) = legend_in(&without, silent.legend_row);
+        assert!(
+            cells.is_empty() && words.is_empty(),
+            "the row was written for an account that switched it off",
+        );
+
+        for (what, on, off) in [
+            ("the avatar", written.avatar, silent.avatar),
+            ("the field", written.field, silent.field),
+            ("the session row", written.session, silent.session),
+            ("the bottom row", written.footer_row, silent.footer_row),
+            ("the way out", written.back, silent.back),
+            ("the clock", written.clock, silent.clock),
+            ("the corner itself", written.legend_row, silent.legend_row),
+        ] {
+            assert_eq!(on, off, "{what} moved when the row was switched off");
+        }
+
+        // And the corner it stands in is the wallpaper's, not the column's.
+        // Where exactly is [`the_row_is_drawn_the_way_the_shell_draws_its_own`].
+        assert!(
+            written.legend_row[0] >= written.column[0] + written.column[2],
+            "the row was written on the column's glass",
+        );
+    }
+
+    /// The row is `lxb-desktop`'s row, to the number.
+    ///
+    /// Not merely like it. It and the start screen's legend are the same row
+    /// seen a second apart, drawn by two programs on the same wallpaper either
+    /// side of a handover that is otherwise seamless — so a size, an inset, a
+    /// line or an ink of this program's own would be a row that visibly
+    /// changed as the session opened.
+    ///
+    /// Every number here is read off the shell: `START_HINT_GLYPH` and its
+    /// three neighbours, `guide_scale`, `CORNER_INSET`, `corner_line`,
+    /// `CORNER_INK`, and the two in `legend_row` that put a word against the
+    /// middle of the button beside it. That last pair is what this test exists
+    /// for: the word was first hung from the middle of a box of its own and
+    /// rode visibly high, because a line box carries its slack below the
+    /// baseline and centring the box is not centring the letters.
+    #[test]
+    fn the_row_is_drawn_the_way_the_shell_draws_its_own() {
+        let users = [user("Alex")];
+        let sessions = [session("LineXinBar")];
+        let palette = theme::theme();
+        for (width, height) in DISPLAYS {
+            let scale = legend_scale(height);
+            let one = view(
+                &users,
+                &sessions,
+                Phase::Authenticating {
+                    prompt: "Password",
+                    secret: true,
+                    input: "",
+                },
+                Focus::Prompt,
+                FOOTER.as_slice(),
+            );
+            let layout = Layout::new(Metrics::new(width, height), &one);
+            let where_ = format!("{width}x{height}");
+
+            // The four sizes, the shell's scale, its inset and its line.
+            let size = layout.legend_size;
+            for (what, drawn, shell) in [
+                ("the button", size.glyph, LEGEND_GLYPH * scale),
+                ("the word", size.label, LEGEND_LABEL * scale),
+                ("the air beside it", size.gap, LEGEND_GAP * scale),
+                ("the air between pairs", size.step, LEGEND_STEP * scale),
+            ] {
+                assert!(
+                    (drawn - shell).abs() < 1e-3,
+                    "{where_}: {what} is {drawn}, not the shell's {shell}",
+                );
+            }
+            let middle = layout.legend_row[1] + layout.legend_row[3] * 0.5;
+            assert!(
+                (layout.legend_row[0] + layout.legend_row[2] - (width - LEGEND_INSET * scale))
+                    .abs()
+                    < 1e-3,
+                "{where_}: the row does not hug its edge by the shell's own inset",
+            );
+            assert!(
+                (middle
+                    - (height
+                        - (LEGEND_CORNER_TOP + LEGEND_CORNER_MARK * LEGEND_MARK_LINE) * scale))
+                    .abs()
+                    < 1e-3,
+                "{where_}: the row is not on the shell's own line",
+            );
+
+            // And in the scene: the button centred on that line, the word hung
+            // from the shell's own offset above it in the shell's own box, and
+            // both inks the shell's at the shell's strength.
+            let output = one_display(one, width, height);
+            let (_, words) = legend_in(&output, layout.legend_row);
+            assert!(!words.is_empty(), "{where_}: nothing was written");
+            for text in &words {
+                assert!(
+                    (text.rect[1] - (middle - text.size * LEGEND_BASELINE)).abs() < 1e-3,
+                    "{where_}: {:?} is hung from {}, not from the shell's {}",
+                    text.content,
+                    text.rect[1],
+                    middle - text.size * LEGEND_BASELINE,
+                );
+                assert!(
+                    (text.rect[3] - text.size * LEGEND_BOX).abs() < 1e-3,
+                    "{where_}: {:?} is in a box {} tall, not the shell's {}",
+                    text.content,
+                    text.rect[3],
+                    text.size * LEGEND_BOX,
+                );
+                assert_eq!(
+                    text.color,
+                    palette.text_soft.a(LEGEND_INK),
+                    "{where_}: {:?} is not written in the shell's ink",
+                    text.content,
+                );
+            }
+            for quad in output.scene.quads.iter().filter(|quad| {
+                [
+                    visual::PAD_SOUTH_SLOT,
+                    visual::PAD_EAST_SLOT,
+                    visual::PAD_NORTH_SLOT,
+                    visual::KEY_ENTER_SLOT,
+                    visual::KEY_ESCAPE_SLOT,
+                ]
+                .contains(&quad.slot)
+            }) {
+                assert!(
+                    (quad.rect[1] + quad.rect[3] * 0.5 - middle).abs() < 1e-3,
+                    "{where_}: cell {} is not centred on the row's line",
+                    quad.slot,
+                );
+                assert!(
+                    (quad.rect[2] - size.glyph).abs() < 1e-3
+                        && (quad.rect[3] - size.glyph).abs() < 1e-3,
+                    "{where_}: cell {} is not the shell's own size",
+                    quad.slot,
+                );
+                // A measured cell carries its strength in `fade` and never in
+                // its colour — see [`shaded`] — so that is where the ink is.
+                assert!(
+                    (quad.fade - palette.text.a(LEGEND_INK)[3]).abs() < 1e-3,
+                    "{where_}: cell {} is not drawn at the shell's strength",
+                    quad.slot,
+                );
+            }
+        }
+    }
+
+    /// The keyboard takes the corner only as far as it actually reaches into
+    /// it, and a display with no wallpaper beside the column has no corner at
+    /// all.
+    ///
+    /// The board is drawn in the middle of the display and is narrower than a
+    /// wide one, so what is left of this corner while somebody types is a
+    /// distance rather than a yes or a no — most of a screen of it on a
+    /// television, enough for a smaller row on a desktop panel. The bottom row
+    /// of the column goes whole when the board arrives because it spans the
+    /// column; this does not, because it does not.
+    #[test]
+    fn the_board_takes_only_as_much_of_the_corner_as_it_reaches() {
+        let users = [user("Alex")];
+        let sessions = [session("LineXinBar")];
+        let board = Board::default();
+        for (width, height) in DISPLAYS {
+            let raised = |board| {
+                let mut one = view(
+                    &users,
+                    &sessions,
+                    Phase::Authenticating {
+                        prompt: "Password",
+                        secret: true,
+                        input: "",
+                    },
+                    Focus::Keyboard,
+                    FOOTER.as_slice(),
+                );
+                one.keyboard = board;
+                one.keyboard_arrival = 1.0;
+                let layout = Layout::new(Metrics::new(width, height), &one);
+                (layout, one_display(one, width, height))
+            };
+            let (open, with_board) = raised(Some(&board));
+            let (shut, without) = raised(None);
+            let keys = keyboard_panel_rect(width, height);
+
+            // The corner is there either way, and the board only ever takes
+            // room off its left-hand end.
+            assert!(open.legend_room && shut.legend_room, "{width}x{height}");
+            assert_eq!(
+                open.legend_row[0] + open.legend_row[2],
+                shut.legend_row[0] + shut.legend_row[2],
+                "{width}x{height}: the board moved the corner itself",
+            );
+            assert!(
+                open.legend_row[2] <= shut.legend_row[2],
+                "{width}x{height}: the board gave the row room",
+            );
+            assert!(
+                open.legend_row[0] >= keys[0] + keys[2],
+                "{width}x{height}: the row's room begins over the keys",
+            );
+
+            // And on every display this greeter will be put on there is enough
+            // of it left to go on saying something.
+            for (what, output, layout) in [
+                ("with the board up", &with_board, open),
+                ("with it down", &without, shut),
+            ] {
+                let (cells, words) = legend_in(output, layout.legend_row);
+                assert!(
+                    !cells.is_empty() && !words.is_empty(),
+                    "{width}x{height} {what}: the corner was left blank",
+                );
+                for text in &words {
+                    assert!(
+                        text.rect[0] >= layout.legend_row[0] - 0.5,
+                        "{width}x{height} {what}: {:?} starts outside the corner",
+                        text.content,
+                    );
+                }
+            }
+        }
+
+        // A display too narrow for a clock has no wallpaper beside the column
+        // to write on: the column is the whole screen, and this corner is the
+        // corner the bottom row's last button is already drawn in.
+        let narrow = Layout::new(
+            Metrics::new(860.0, 540.0),
+            &view(
+                &users,
+                &sessions,
+                Phase::Choose,
+                Focus::Users,
+                FOOTER.as_slice(),
+            ),
+        );
+        assert!(!narrow.split && !narrow.legend_room);
+        let mut one = view(
+            &users,
+            &sessions,
+            Phase::Choose,
+            Focus::Users,
+            FOOTER.as_slice(),
+        );
+        one.legend = Legend::default();
+        let (cells, words) = legend_in(&one_display(one, 860.0, 540.0), narrow.legend_row);
+        assert!(
+            cells.is_empty() && words.is_empty(),
+            "a display with no wallpaper beside the column was written on anyway",
+        );
+    }
+
+    /// An open session menu takes the row away rather than cutting it.
+    ///
+    /// The panel dims the column and steps it back because the column is not
+    /// what is being read while the menu is up, and two of the three presses
+    /// the row names are about the panel by then rather than about the column.
+    /// A row that stayed would be explaining the wrong screen.
+    #[test]
+    fn the_open_menu_takes_the_legend_away_rather_than_cutting_it() {
+        let users = [user("Alex")];
+        let sessions = [session("LineXinBar"), session("Plasma")];
+        // Where that corner *is* once a menu has stepped the screen back around
+        // the badge it came out of. Asked of the production transform rather
+        // than guessed at: the row is not where the layout put it, and a band
+        // taken straight off the layout would report a row that had simply
+        // moved as a row that was never drawn.
+        let receded = |band: [f32; 4], anchor: [f32; 4], depth: f32| {
+            let mut one = Output::default();
+            one.scene.quads.push(Quad {
+                rect: band,
+                ..Quad::default()
+            });
+            recede_into_depth(&mut one, anchor, depth);
+            one.scene.quads[0].rect
+        };
+        let with_menu = |menu: Option<Menu>| {
+            let mut one = view(
+                &users,
+                &sessions,
+                Phase::Choose,
+                Focus::Session,
+                FOOTER.as_slice(),
+            );
+            one.session_menu = menu;
+            let layout = Layout::new(Metrics::new(1600.0, 900.0), &one);
+            let band = match menu {
+                Some(menu) => receded(layout.legend_row, layout.session, menu.progress),
+                None => layout.legend_row,
+            };
+            legend_in(&one_display(one, 1600.0, 900.0), band)
+        };
+
+        let (cells, words) = with_menu(None);
+        assert!(
+            !cells.is_empty() && !words.is_empty(),
+            "the row was written"
+        );
+
+        let (cells, words) = with_menu(Some(Menu {
+            selected: 0,
+            progress: 1.0,
+            interactive: true,
+        }));
+        assert!(
+            cells.is_empty() && words.is_empty(),
+            "the row was left explaining the column behind an open menu",
+        );
+
+        // A menu on its way out is not one that can be answered, and the row
+        // comes back with the column it belongs to.
+        let (cells, words) = with_menu(Some(Menu {
+            selected: 0,
+            progress: 0.4,
+            interactive: false,
+        }));
+        assert!(
+            !cells.is_empty() && !words.is_empty(),
+            "the row stayed away after the menu had stopped being answerable",
+        );
+    }
+
+    /// The row stays inside its corner, in every language, on every display.
+    ///
+    /// It is laid out from its right-hand end leftwards and knows nothing about
+    /// what is beside it, so the only thing stopping the leftmost pair printing
+    /// over the column's glass — or over the keys of the on-screen board, which
+    /// is what the corner shares its floor with — is [`legend_that_fits`]. This
+    /// walks every language and every display with every row the corner can
+    /// carry, with the board up and down, and measures where the row actually
+    /// landed: the left edge of the leftmost word and of the leftmost button,
+    /// against the room the corner was given.
+    ///
+    /// The words themselves are held to their boxes by
+    /// [`no_translation_overflows_the_place_it_is_written`], which is the other
+    /// half of this and a different way for the same row to break.
+    #[test]
+    fn the_legend_stays_inside_the_corner_it_is_written_in() {
+        let users = [user("Alex")];
+        let sessions = [session("LineXinBar")];
+        let board = Board::default();
+        for language in i18n::ALL {
+            i18n::with_language(language, || {
+                let strings = language.strings();
+                let phases = [
+                    Phase::Choose,
+                    Phase::Username {
+                        input: "",
+                        error: None,
+                    },
+                    Phase::Authenticating {
+                        prompt: strings.password,
+                        secret: true,
+                        input: "",
+                    },
+                    Phase::Busy(strings.checking),
+                    Phase::Error(strings.incorrect_password),
+                ];
+                for (width, height) in DISPLAYS {
+                    for phase in phases {
+                        for pad in [true, false] {
+                            for raised in [None, Some(&board)] {
+                                let mut one = view(
+                                    &users,
+                                    &sessions,
+                                    phase,
+                                    Focus::Prompt,
+                                    FOOTER.as_slice(),
+                                );
+                                one.legend = Legend { shown: true, pad };
+                                one.keyboard = raised;
+                                one.keyboard_arrival = 1.0;
+                                let layout = Layout::new(Metrics::new(width, height), &one);
+                                let output = one_display(one, width, height);
+                                let margin = layout.legend_row[0];
+                                let edge = layout.legend_row[0] + layout.legend_row[2];
+                                let (cells, words) = legend_in(&output, layout.legend_row);
+                                assert!(
+                                    !cells.is_empty(),
+                                    "{}: nothing was drawn in the corner at {width}x{height}",
+                                    language.endonym(),
+                                );
+                                for text in &words {
+                                    assert!(
+                                        text.rect[0] >= margin - 0.5,
+                                        "{}: {:?} starts {:.1}px outside the corner at \
+                                         {width}x{height}",
+                                        language.endonym(),
+                                        text.content,
+                                        margin - text.rect[0],
+                                    );
+                                    assert!(
+                                        text.rect[0] + text.rect[2] <= edge + 0.5,
+                                        "{}: {:?} ends past the corner at {width}x{height}",
+                                        language.endonym(),
+                                        text.content,
+                                    );
+                                }
+                                let leftmost = output
+                                    .scene
+                                    .quads
+                                    .iter()
+                                    .filter(|quad| {
+                                        [
+                                            visual::PAD_SOUTH_SLOT,
+                                            visual::PAD_EAST_SLOT,
+                                            visual::PAD_NORTH_SLOT,
+                                            visual::KEY_ENTER_SLOT,
+                                            visual::KEY_ESCAPE_SLOT,
+                                        ]
+                                        .contains(&quad.slot)
+                                    })
+                                    .map(|quad| quad.rect[0])
+                                    .fold(f32::INFINITY, f32::min);
+                                assert!(
+                                    leftmost >= margin - 0.5,
+                                    "{}: a button of the row starts {:.1}px outside the \
+                                     corner at {width}x{height}",
+                                    language.endonym(),
+                                    margin - leftmost,
+                                );
+                            }
+                        }
+                    }
+                }
+            });
+        }
+
+        // And the check has teeth. A row of six pairs cannot be made to fit this
+        // corner at the smallest size it may be drawn, so it has to come back
+        // shorter than it went in — and never empty.
+        let long = |label| Hint {
+            label,
+            slot: visual::PAD_SOUTH_SLOT,
+        };
+        let crowded = vec![
+            long("Selecionar"),
+            long("Klawiatura"),
+            long("Seleccionar"),
+            long("Auswählen"),
+            long("Клавиатура"),
+            long("Sélectionner"),
+        ];
+        let size = Layout::new(
+            Metrics::new(1280.0, 720.0),
+            &view(
+                &users,
+                &sessions,
+                Phase::Choose,
+                Focus::Prompt,
+                FOOTER.as_slice(),
+            ),
+        )
+        .legend_size;
+        let room = 260.0;
+        let (kept, cut) = legend_that_fits(crowded, size, room);
+        assert!(
+            !kept.is_empty() && kept.len() < 6,
+            "a row too long for the column was not shortened",
+        );
+        assert!(
+            legend_ink(&kept, cut) <= room + 0.5,
+            "the row it came back with still does not fit",
+        );
+        assert!(
+            cut.label >= size.label * LEGEND_SMALLEST - 1e-3,
+            "the row was shrunk past the size anything is readable at",
+        );
+    }
+
     /// Nothing prints through the open menu.
     ///
     /// Text is one pass after every quad, so a panel does not cover a label by
@@ -4235,17 +5378,27 @@ mod tests {
     /// What must survive is the writing the panel does *not* cover, including
     /// the run whose box dips under its edge while its words stand clear above
     /// it — the field's prompt, one line up.
+    ///
+    /// The legend at the foot of the column is switched off on both screens
+    /// here, and has to be. It is the one piece of writing an open menu does
+    /// not *cut* but takes away outright — see [`build_legend`] — so a check
+    /// built on "a run is the column's own if it was there before the menu was
+    /// raised" has nothing true to say about it.
+    /// [`the_open_menu_takes_the_legend_away_rather_than_cutting_it`] is what
+    /// says the rest.
     #[test]
     fn the_open_menu_takes_away_the_writing_it_covers_and_no_other() {
         let users = [user("Alex")];
         let sessions = [session("LineXinBar"), session("Plasma")];
-        let mut open = view(
-            &users,
-            &sessions,
-            Phase::Choose,
-            Focus::Session,
-            FOOTER.as_slice(),
-        );
+        let hushed = |phase, focus| {
+            let mut one = view(&users, &sessions, phase, focus, FOOTER.as_slice());
+            one.legend = Legend {
+                shown: false,
+                ..Legend::default()
+            };
+            one
+        };
+        let mut open = hushed(Phase::Choose, Focus::Session);
         open.session_menu = Some(Menu {
             selected: 0,
             progress: 1.0,
@@ -4253,16 +5406,7 @@ mod tests {
         });
         let output = one_display(open, 1600.0, 900.0);
         let metrics = Metrics::new(1600.0, 900.0);
-        let layout = Layout::new(
-            metrics,
-            &view(
-                &users,
-                &sessions,
-                Phase::Choose,
-                Focus::Session,
-                FOOTER.as_slice(),
-            ),
-        );
+        let layout = Layout::new(metrics, &hushed(Phase::Choose, Focus::Session));
         let panel = menu_bounds(
             menu_rect(layout, metrics, sessions.len()).0,
             layout.session,
@@ -4276,17 +5420,7 @@ mod tests {
         // that is where those runs now are — and comparing rectangle for
         // rectangle is what makes this a test of the cut rather than of the
         // step.
-        let mut closed = one_display(
-            view(
-                &users,
-                &sessions,
-                Phase::Choose,
-                Focus::Session,
-                FOOTER.as_slice(),
-            ),
-            1600.0,
-            900.0,
-        );
+        let mut closed = one_display(hushed(Phase::Choose, Focus::Session), 1600.0, 900.0);
         recede_into_depth(&mut closed, layout.session, 1.0);
         let mut covered = 0;
         let mut clear = 0;

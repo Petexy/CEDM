@@ -19,7 +19,7 @@ One glass column on the left of the wallpaper, and the time on the right of it.
 │  (session) Plasma  ▸menu  │      analytic wallpaper    │
 │                           │                            │
 │  ⏸    ⟳    ⏻    →👤       │                            │
-│ Sleep Restart Shut  Diff.  │                            │
+│ Sleep Restart Shut  Diff.  │      Select ⊙  Back ⊙      │
 └───────────────────────────┴────────────────────────────┘
 ```
 
@@ -267,6 +267,8 @@ The accent had no such copy, and the result was a login screen that drew every a
 
 ```toml
 accent = "Red"
+button-hints = true
+controller-in-hand = true
 
 [display.DP-1]
 hdr = true
@@ -348,6 +350,22 @@ The login screen itself **rises into view over 600 ms** from its first frame, on
 What rises is everything the greeter draws, and **nothing of the wallpaper**. That is the only shape this can take. The wallpaper is on the screen before this program has a window — the compositor draws it, at the phase a scene clock kept across the hand-over — so a rise that began from black would have to lay black over a picture that is already there, and the display would drop to black and come back rather than arrive. What was missing was never the picture; it was everything in front of it. Measured across the rise, the wallpaper moves by at most one 8-bit level, which is rounding.
 
 It is longer than every other movement here because it is the only one that is not an answer to something the user did — nobody is waiting on it. For the same reason it dims the picture and never the controls: a screen that is still arriving is a screen that works, and somebody who starts typing their password into the first half-second of it has every character. Only a departure takes the controls away. `--shot` captures a fully arrived frame, since a picture of a login screen a fraction into its own entrance is a picture of nothing much.
+
+### What the buttons do, written in the corner
+
+The bottom-right corner of the wallpaper carries a row of the presses this screen answers: a word, and a picture of the button that does it. `Select`, `Keyboard` and `Back`, read left to right — the press that takes what the light is standing on, the one that raises the on-screen board to answer with, and the way out.
+
+It is in that corner because it is in that corner one press later. LineXinBar writes its own legend opposite the thing the screen is about, and the login screen and the shell's start screen are either side of a handover that is otherwise seamless; a hand that has learnt where to look for this row must not have to learn it again. It is written in the clock's ink, the accent's own pale cast, because the clock and the row are the only two things this screen puts on the wallpaper.
+
+**The button is drawn rather than named.** The same act is South on a pad and Enter on a keyboard, and no wording covers both without naming neither — "press A" is wrong on a PlayStation pad and meaningless to somebody typing. So the row draws whichever control is in the user's hands, and it draws a pad by *position* rather than by letter: A/B/X/Y are swapped between Xbox and Nintendo pads and mean nothing at all on a PlayStation one.
+
+Which control that is starts as the account's own answer — `controller-in-hand` out of its published look, which is the shell's record of what that person last reached for — and is settled outright by the first press this greeter itself sees. A pad press makes it a pad, a key makes it a keyboard, and it stays settled across the carousel: somebody typing who pages to the next account is not shown a controller because *that* account's last session was played with one.
+
+**It names no button that does nothing.** `Keyboard` is there only where there is a field to type into, and only on a pad — the on-screen board is a picture of the keys already under a typist's hands, and no key on this screen raises it. `Back` is there exactly where the arrow at the head of the column is, asked of the same phase, so the two cannot disagree about whether there is a way out.
+
+**The corner is shared with the keyboard, and gives up only what the board actually takes.** The board is drawn in the middle of the display and is narrower than a wide one, so what is left beside it is a distance rather than a yes or a no: the row keeps as much of the corner as there is and is drawn smaller — never below eleven twentieths — before it gives up a pair, and the pair it gives up is the last. A display too narrow for the clock has no wallpaper beside the column at all, and carries no row, exactly as it carries no clock. An open session menu takes the row away whole, as a context menu does in the shell: while that panel is up the column behind it has been dimmed and stepped back, and two of the three buttons are about the panel rather than about the column.
+
+**It is off where the account turned it off.** `button-hints` is one key in `shell.toml`, written by Settings > System > Button hints, and it is already the one key in that file the shell's own *applications* read for their legends. A session with the hints off is a session with them off everywhere, and this screen is not the exception. Nothing on the screen is measured against the row, so switching it off — or walking the carousel onto somebody who has — moves not one pixel of the interface.
 
 ## What a button sounds like
 

@@ -74,6 +74,38 @@ walks both clocks through all twenty-four hours, and why
 `the_widest_time_either_clock_writes_fits_beside_the_column` measures the
 longest of them against the room the layout gives it at every size.
 
+## What the buttons do
+
+The row in the bottom-right corner of the wallpaper says `Select`, `Keyboard`
+and `Back`, and those three are the greeter's own words about its own buttons —
+`hint_select`, `hint_keyboard`, `hint_back` in `Strings`. They are translated in
+every language, unlike the word caps of the on-screen keyboard beside them: a
+cap is a picture of a key with a legend printed on it and stays Latin wherever
+the physical keyboards do, and there is no keyboard anywhere for these to match.
+
+Each of the three is `lxb-desktop`'s own word for the same act — `shell-select`,
+`shell-keyboard`, `shell-back` — and has to stay so. A legend is a promise, and
+the login screen and the start screen one press later are either side of a
+handover; a hand that has just read `Wybierz` here must read `Wybierz` there.
+Take a new one from the shell's `locales/*.ftl` rather than translating it
+again.
+
+The row is laid out from its right-hand end leftwards and every word is set
+right-aligned in a box estimated at 0.66 em a character (a full em for Han),
+because nothing can measure a run before the renderer shapes it. A word wider
+than its estimate wraps onto a line the box has no room for, which is half a
+word on screen: `no_translation_overflows_the_place_it_is_written` walks all ten
+languages against it, and `the_legend_stays_inside_the_corner_it_is_written_in`
+walks them again against the corner the row has to fit in.
+
+**A new Chinese word needs the font cut again.** `NotoSansCJKsc-{Regular,Bold}`
+are subset to the characters this program's own words are made of, so a word
+with a character that was not there before rasterises as nothing at all. The
+three words above cost five: `选`, `择`, `键`, `盘`, `返`. Re-cut both faces from
+a full Noto Sans CJK SC over the union of what they already carry and what is
+being added — `every_shipped_word_can_be_drawn_by_a_shipped_face` loads them
+into an empty database and is what catches a character that was missed.
+
 ## Adding a language
 
 1. Add a `Language` variant and include it in `ALL` in `src/i18n.rs`.

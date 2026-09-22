@@ -150,6 +150,41 @@ pub struct Look {
     /// leaves the account's language to answer.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub clock: Option<String>,
+    /// Whether that account's shell writes what its buttons do wherever it has
+    /// room to — Settings > System > Button hints, on in a shell nobody has
+    /// asked otherwise.
+    ///
+    /// Carried for the clock's reason, and it is the setting with the widest
+    /// reach of any of them: it is already the one key in `shell.toml` that
+    /// *applications* read as well, so a session with the hints off has them
+    /// off in every program built on the toolkit. A login screen that drew a
+    /// row of button pictures in front of somebody who had switched them off
+    /// everywhere else would be the last screen on the machine still
+    /// explaining itself.
+    ///
+    /// A look that says nothing leaves them on — which is what the shell does
+    /// with a silent file, so that a settings file older than the row does not
+    /// read as somebody having turned it off. See [`Look::button_hints`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub button_hints: Option<bool>,
+    /// Whether the controller is the control that account last reached for,
+    /// rather than a keyboard.
+    ///
+    /// Nothing chooses it; the shell watches for it and writes down what it
+    /// saw, because it is a statement about a person rather than about a
+    /// session — somebody who spent all of last night typing does not become a
+    /// controller user again by turning the machine off.
+    ///
+    /// It decides which control the legend draws a picture of, and that is the
+    /// whole of what it is for here. It is only ever the *first* answer: the
+    /// greeter has its own eyes, and the first press it sees settles the
+    /// question for the rest of the screen's life. See [`Look::pad_in_hand`].
+    ///
+    /// A look that says nothing leaves the pad, which is the shell's own
+    /// default and the console's: a machine with nobody's habits recorded yet
+    /// is a machine in front of a sofa.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub controller_in_hand: Option<bool>,
     /// Which arrangement the account's keyboards are set to, as the one key
     /// `shell.toml` writes both halves of that answer in — `pl (qwertz)`, or a
     /// bare layout where there is no variant.
@@ -275,6 +310,19 @@ impl Look {
             .as_deref()
             .and_then(crate::clock::Clock::parse)
             .unwrap_or_default()
+    }
+
+    /// Whether this account's screen says what its buttons do. A look that says
+    /// nothing leaves them on — see [`Look::button_hints`] the field, where the
+    /// default is argued.
+    pub fn button_hints(&self) -> bool {
+        self.button_hints.unwrap_or(true)
+    }
+
+    /// Whether the pad is the control this account last reached for. A look
+    /// that says nothing leaves the pad.
+    pub fn pad_in_hand(&self) -> bool {
+        self.controller_in_hand.unwrap_or(true)
     }
 
     /// The material it asks one half of the screen to be drawn in, if this
@@ -1086,6 +1134,8 @@ mod tests {
     const SHELL: &str = r#"
 accent = "Red"
 clock = "12-hour"
+button-hints = false
+controller-in-hand = false
 theme-wallpaper = "Simple"
 hdr = false
 hdr-sdr-brightness = 200
@@ -1174,6 +1224,51 @@ Music = "modified-newest-first"
                 .expect("a look is written as TOML")
                 .contains("clock"),
             "a look that says nothing writes nothing"
+        );
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    /// The two settings the legend is drawn from survive the same round trip,
+    /// and a look that says nothing about either leaves the row on and the pad
+    /// in hand.
+    ///
+    /// The second half is the one that matters: every look published before
+    /// the greeter had a legend is silent about both, which is every look on
+    /// every machine today. Reading that silence as "no hints" would turn the
+    /// row off on precisely the machines it was added for, and reading it as
+    /// "keyboard" would draw keycaps on a console.
+    #[test]
+    fn the_legends_two_settings_are_carried_and_silence_leaves_the_row_on() {
+        let home = home_with(SHELL, None);
+        let look = Look::read(&home, None);
+        assert!(!look.button_hints(), "the file says the hints are off");
+        assert!(
+            !look.pad_in_hand(),
+            "and that a keyboard is what is in hand"
+        );
+
+        let published = toml::to_string(&look).expect("a look is written as TOML");
+        assert!(published.contains("button-hints = false"), "{published}");
+        assert!(
+            published.contains("controller-in-hand = false"),
+            "{published}"
+        );
+        let back: Look = toml::from_str(&published).expect("and read back");
+        assert!(!back.button_hints());
+        assert!(!back.pad_in_hand());
+
+        assert!(
+            Look::default().button_hints(),
+            "a look with nothing in it still says what the buttons do"
+        );
+        assert!(
+            Look::default().pad_in_hand(),
+            "and is a console until something says otherwise"
+        );
+        let silent = toml::to_string(&Look::default()).expect("a look is written as TOML");
+        assert!(
+            !silent.contains("button-hints") && !silent.contains("controller-in-hand"),
+            "a look that says nothing writes nothing: {silent}"
         );
         fs::remove_dir_all(home).unwrap();
     }

@@ -1,0 +1,23 @@
+<!--
+  The east face button: Xbox's B, PlayStation's Circle, Nintendo's A.
+
+  The cluster again, the bead one quarter round from pad-south.svg. East is
+  Back on every layout, which is what makes it the one button on the pad that
+  can be named without knowing whose pad it is.
+
+  The drawing below is `lxb-desktop`'s `pad-east.svg`, unchanged from `<svg` to
+  the end — the same button, drawn the same way, on the two screens either side
+  of a handover.
+
+  lxb:shape — the material is computed from this outline; see
+  src/visual/field.rs, which is where that is explained.
+-->
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <g fill="none" stroke="#fff" stroke-width="1.5">
+    <circle cx="12" cy="5.3" r="2.7"/>
+    <circle cx="5.3" cy="12" r="2.7"/>
+    <circle cx="12" cy="18.7" r="2.7"/>
+  </g>
+  <circle cx="18.7" cy="12" r="3.4" fill="#fff"/>
+</svg>

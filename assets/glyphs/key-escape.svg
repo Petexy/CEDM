@@ -1,0 +1,31 @@
+<!--
+  The Escape key, as the key is labelled.
+
+  The word, because the word is what is printed on it, and in capitals because
+  at the size a legend is drawn a lowercase pair is x-height and its counters
+  close up under the material long before the capitals' do. No cap round the
+  letters: nothing else in this greeter says ESC, so the word needs no
+  container to say which key it is, and the room is what decides whether three
+  letters are legible at all.
+
+  It is the keyboard's half of what pad-east.svg says, and it is the one mark
+  in the legend that is a word rather than a shape — see the file in
+  `lxb-desktop`, where the arrow that was tried first is written up.
+
+  The drawing below is `lxb-desktop`'s `key-escape.svg`, unchanged from `<svg`
+  to the end — the same key, drawn the same way, on the two screens either side
+  of a handover.
+
+  lxb:shape — the material is computed from this outline; see
+  src/visual/field.rs, which is where that is explained.
+-->
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <g fill="none" stroke="#fff" stroke-width="1.6"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M8.0 7.0H3.0v8.8h5.0"/>
+    <path d="M3.0 11.4h4.2"/>
+    <path d="M14.2 8.0a2.5 2.2 0 1 0-2.2 3.4 2.5 2.2 0 1 1-2.2 3.6"/>
+    <path d="M20.11 8.03a2.5 4.4 0 1 0 0 6.74"/>
+  </g>
+</svg>

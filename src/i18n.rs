@@ -580,6 +580,20 @@ pub struct Strings {
     pub key_caps: &'static str,
     pub key_ctrl: &'static str,
     pub key_alt: &'static str,
+
+    // What the buttons do, at the foot of the column. Three acts and three
+    // words, and every one of them is `lxb-desktop`'s own — `shell-select`,
+    // `shell-keyboard`, `shell-back` — because a legend is a promise, and a
+    // hand that has learnt to read the row on the login screen has to be
+    // reading the same row a second later in the session it opens.
+    //
+    // Translated everywhere, unlike the keyboard's caps above. A cap is a
+    // picture of a key with a legend printed on it and stays Latin where the
+    // keyboards do; these are the greeter's own words about its own buttons,
+    // and there is no keyboard anywhere for them to match.
+    pub hint_select: &'static str,
+    pub hint_keyboard: &'static str,
+    pub hint_back: &'static str,
 }
 
 impl Strings {
@@ -651,6 +665,9 @@ const ENGLISH: Strings = Strings {
     key_caps: "Caps",
     key_ctrl: "Ctrl",
     key_alt: "Alt",
+    hint_select: "Select",
+    hint_keyboard: "Keyboard",
+    hint_back: "Back",
 };
 
 const FRENCH: Strings = Strings {
@@ -696,6 +713,9 @@ const FRENCH: Strings = Strings {
     key_caps: "Verr Maj",
     key_ctrl: "Ctrl",
     key_alt: "Alt",
+    hint_select: "Sélectionner",
+    hint_keyboard: "Clavier",
+    hint_back: "Retour",
 };
 
 const GERMAN: Strings = Strings {
@@ -741,6 +761,9 @@ const GERMAN: Strings = Strings {
     key_caps: "Feststell",
     key_ctrl: "Strg",
     key_alt: "Alt",
+    hint_select: "Auswählen",
+    hint_keyboard: "Tastatur",
+    hint_back: "Zurück",
 };
 
 const HINDI: Strings = Strings {
@@ -786,6 +809,9 @@ const HINDI: Strings = Strings {
     key_caps: "Caps",
     key_ctrl: "Ctrl",
     key_alt: "Alt",
+    hint_select: "चुनें",
+    hint_keyboard: "कीबोर्ड",
+    hint_back: "वापस",
 };
 
 const POLISH: Strings = Strings {
@@ -831,6 +857,9 @@ const POLISH: Strings = Strings {
     key_caps: "Caps",
     key_ctrl: "Ctrl",
     key_alt: "Alt",
+    hint_select: "Wybierz",
+    hint_keyboard: "Klawiatura",
+    hint_back: "Wstecz",
 };
 
 const PORTUGUESE: Strings = Strings {
@@ -876,6 +905,9 @@ const PORTUGUESE: Strings = Strings {
     key_caps: "Caps",
     key_ctrl: "Ctrl",
     key_alt: "Alt",
+    hint_select: "Selecionar",
+    hint_keyboard: "Teclado",
+    hint_back: "Voltar",
 };
 
 const RUSSIAN: Strings = Strings {
@@ -921,6 +953,9 @@ const RUSSIAN: Strings = Strings {
     key_caps: "Caps",
     key_ctrl: "Ctrl",
     key_alt: "Alt",
+    hint_select: "Выбрать",
+    hint_keyboard: "Клавиатура",
+    hint_back: "Назад",
 };
 
 const SPANISH: Strings = Strings {
@@ -966,6 +1001,9 @@ const SPANISH: Strings = Strings {
     key_caps: "Bloq",
     key_ctrl: "Ctrl",
     key_alt: "Alt",
+    hint_select: "Seleccionar",
+    hint_keyboard: "Teclado",
+    hint_back: "Atrás",
 };
 
 const CHINESE: Strings = Strings {
@@ -1011,6 +1049,9 @@ const CHINESE: Strings = Strings {
     key_caps: "Caps",
     key_ctrl: "Ctrl",
     key_alt: "Alt",
+    hint_select: "选择",
+    hint_keyboard: "键盘",
+    hint_back: "返回",
 };
 
 impl Strings {

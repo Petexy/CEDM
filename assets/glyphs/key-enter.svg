@@ -1,0 +1,29 @@
+<!--
+  The Enter key, as the key it is.
+
+  A cap with the arrow every keyboard in the world prints on this one key. It
+  is the keyboard's half of what pad-south.svg says: the press that takes what
+  is under the light, and on this screen the press that sends an answer.
+
+  A rounded square where the pad's marks are circles, which is what says which
+  kind of thing is being named. The two are never on one screen together — the
+  legend draws whichever control is in the user's hands — so the shape has to
+  carry it alone.
+
+  The drawing below is `lxb-desktop`'s `key-enter.svg`, unchanged from `<svg`
+  to the end — the same key, drawn the same way, on the two screens either side
+  of a handover.
+
+  lxb:shape — the material is computed from this outline; see
+  src/visual/field.rs, which is where that is explained.
+-->
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+  <rect x="2.75" y="5.5" width="18.5" height="13" rx="3.2"
+        fill="none" stroke="#fff" stroke-width="1.5"/>
+  <g fill="none" stroke="#fff" stroke-width="1.5"
+     stroke-linecap="round" stroke-linejoin="round">
+    <path d="M16.6 8.7v4.6H9.1"/>
+    <path d="M11.4 11 9 13.3l2.4 2.3"/>
+  </g>
+</svg>

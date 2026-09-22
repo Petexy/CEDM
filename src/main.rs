@@ -592,6 +592,25 @@ struct Application {
     /// screen is the account's, and moving along the carousel moves it.
     user_clocks: Vec<cedm::clock::Clock>,
     clock: cedm::clock::Clock,
+    /// What each account's shell says about the row that explains its buttons —
+    /// whether it is written, and which control that account last reached for —
+    /// and the answer for the one the selection is standing on. Held the way
+    /// the clocks above are, and for their reason: the screen is the account's.
+    user_legends: Vec<cedm::ui::Legend>,
+    legend: cedm::ui::Legend,
+    /// Which control this greeter has itself seen a press from, once it has
+    /// seen one at all.
+    ///
+    /// It outranks every account's published answer, and it has to. That answer
+    /// is the shell's memory of a session that ended — as good a first guess as
+    /// exists and nothing more — while this is somebody's hand on something,
+    /// now, in front of this screen. It also has to survive the carousel: a
+    /// person typing who pages to the next account must not be shown a pad
+    /// because *that* account's last session was played with one.
+    ///
+    /// `None` until the first press, which is every screen nobody has touched
+    /// yet — and those are the screens the published answer is for.
+    hands_on_pad: Option<bool>,
     /// What each listed account's shell is made of, in the same order.
     user_themes: Vec<Materials>,
     /// The keyboard each listed account types on, in the same order again, as
@@ -714,6 +733,8 @@ impl Application {
             .collect::<Vec<_>>();
         let user_clocks = users.iter().map(user_clock).collect::<Vec<_>>();
         let clock = user_clocks.get(selected_user).copied().unwrap_or_default();
+        let user_legends = users.iter().map(user_legend).collect::<Vec<_>>();
+        let legend = user_legends.get(selected_user).copied().unwrap_or_default();
         let user_themes = users
             .iter()
             .map(|user| user_theme(&state, user))
@@ -778,6 +799,9 @@ impl Application {
             user_accents,
             user_clocks,
             clock,
+            user_legends,
+            legend,
+            hands_on_pad: None,
             user_themes,
             keyboard: machine_keyboard.clone(),
             user_keyboards,
@@ -963,6 +987,11 @@ impl Application {
             // Nobody is named, so there is no account whose setting this could
             // be: the machine's own language answers, which is the default.
             self.clock = cedm::clock::Clock::default();
+            // And for the same reason the row goes back to what a console says
+            // before anybody has told it otherwise. Which control is drawn is
+            // still whatever this greeter has seen in somebody's hands — see
+            // `Application::button_legend`.
+            self.legend = cedm::ui::Legend::default();
             // Nobody is named, so there is no account whose keyboard this
             // could be: the machine's own, which is what it was before any
             // account was looked at.
@@ -972,6 +1001,7 @@ impl Application {
             self.accent = self.user_accents[self.selected_user].clone();
             self.material = self.user_themes[self.selected_user].clone();
             self.clock = self.user_clocks[self.selected_user];
+            self.legend = self.user_legends[self.selected_user];
             self.user_keyboards[self.selected_user].clone()
         };
         visual::theme::preview_accent(&self.accent);
@@ -1504,6 +1534,23 @@ impl Application {
         }
     }
 
+    /// The legend as it is actually drawn: what the account being looked at
+    /// says about the row, and whichever control is in hand now.
+    ///
+    /// Deliberately not gated on `--no-gamepad`. That flag says this run is not
+    /// *listening* to a pad, which is how the screen is looked at from inside
+    /// somebody's desktop session and how `--shot` composes a frame — and a
+    /// picture of the login screen that drew a different row because of the
+    /// flag used to take it would be a picture of something nobody will ever
+    /// see. It needs no help either way: with no pad being read nothing will
+    /// ever be seen from one, and the first key pressed settles it.
+    fn button_legend(&self) -> cedm::ui::Legend {
+        cedm::ui::Legend {
+            pad: self.hands_on_pad.unwrap_or(self.legend.pad),
+            ..self.legend
+        }
+    }
+
     /// Whether the session menu is up and may be answered.
     fn menu_live(&self) -> bool {
         self.menu_opened.is_some() && self.menu_closing.is_none()
@@ -2014,7 +2061,15 @@ impl Application {
             return;
         }
         if now >= self.next_poll {
-            for action in self.controller.poll(self.started.elapsed()) {
+            let actions = self.controller.poll(self.started.elapsed());
+            // A press on the pad is a hand on the pad, whatever the account
+            // being looked at last did. Asked of the poll rather than of each
+            // action because it is one fact about one moment — see
+            // `Application::hands_on_pad`.
+            if !actions.is_empty() {
+                self.hands_on_pad = Some(true);
+            }
+            for action in actions {
                 self.apply_action(action);
             }
             self.next_poll = now + POLL_INTERVAL;
@@ -2243,6 +2298,7 @@ impl Application {
                 now: self.now,
                 clock: self.clock,
                 session_menu: menu,
+                legend: self.button_legend(),
             },
             displays,
         );
@@ -2374,6 +2430,11 @@ impl ApplicationHandler for Application {
             }
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                // And a key is a hand on a keyboard. The board's own keys never
+                // arrive here — they are pressed with whatever is driving the
+                // column and reach `act_on_key` instead — so this is a real
+                // key on a real keyboard every time.
+                self.hands_on_pad = Some(false);
                 if self.keyboard_opened.is_some() && input_stage(&self.stage) {
                     match &event.logical_key {
                         Key::Named(NamedKey::Backspace) | Key::Character(_) => {
@@ -2919,6 +2980,24 @@ fn user_keyboard(user: &User, machine: &(String, String)) -> (String, String) {
 fn user_clock(user: &User) -> cedm::clock::Clock {
     cedm::look::published(&user.name, user.uid)
         .map(|look| look.clock())
+        .unwrap_or_default()
+}
+
+/// What an account's shell says about the row that explains its buttons.
+///
+/// Out of the copy of `shell.toml` that account published on its way into its
+/// last session, on the clock's own terms and for the clock's own reason: the
+/// settings themselves are in a home directory this process has no business
+/// reading, and nothing in broker state has ever known about a button hint. An
+/// account with no published look — or one written before the shell had the
+/// row, which is every look on every machine today — gets the default, which
+/// is a row, and a pad to draw it with.
+fn user_legend(user: &User) -> cedm::ui::Legend {
+    cedm::look::published(&user.name, user.uid)
+        .map(|look| cedm::ui::Legend {
+            shown: look.button_hints(),
+            pad: look.pad_in_hand(),
+        })
         .unwrap_or_default()
 }
 

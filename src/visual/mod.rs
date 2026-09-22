@@ -32,11 +32,23 @@ pub const POWER_SLOT: u32 = 11;
 pub const USER_SWITCH_SLOT: u32 = 12;
 pub const SESSION_SLOT: u32 = 13;
 pub const KEYBOARD_SHOW_SLOT: u32 = 14;
+/// The five the legend draws its buttons with: three of the pad's face buttons,
+/// and the two keys that do the same two things for somebody at a keyboard.
+///
+/// [`PAD_SELECT_SLOT`] and [`PAD_WEST_SLOT`] above them are the shell's other
+/// two pad marks, carried over with the rest of its set and drawn by nothing
+/// here. These five are drawn — see `crate::ui`'s legend, which is the row that
+/// says what the buttons do.
+pub const PAD_SOUTH_SLOT: u32 = 15;
+pub const PAD_EAST_SLOT: u32 = 16;
+pub const PAD_NORTH_SLOT: u32 = 17;
+pub const KEY_ENTER_SLOT: u32 = 18;
+pub const KEY_ESCAPE_SLOT: u32 = 19;
 /// The first cell of the clock's own alphabet: the ten digits by value, then the
 /// colon, one cell each. Not drawings — each holds a *measurement* of a
 /// character's shape, which is what lets the shader shade the time out of the
 /// same water it shades the marks out of. See [`letters`].
-pub const LETTER_SLOT: u32 = 15;
+pub const LETTER_SLOT: u32 = 20;
 /// The first cell an account's own picture goes in; one per enumerated account,
 /// in the order they were enumerated.
 pub const FACE_SLOT: u32 = LETTER_SLOT + letters::SET.len() as u32;
@@ -51,18 +63,25 @@ pub const SQUIRCLE_CORNER: f32 = 4.0;
 /// the one thing that cannot be redrawn at whatever size it is asked for.
 const CELL: u32 = 256;
 const ATLAS_COLUMNS: u32 = 4;
-/// Fifteen drawings, eleven letters of the clock, and a cell for each account's
-/// picture. Eleven rows of four leaves eighteen faces, which is more local
-/// interactive accounts than a machine with a login screen on a television has;
-/// past that an account keeps its initial, which is what every account without a
-/// published picture shows anyway.
+/// Eighteen drawings, fourteen letters of the clock, and a cell for each
+/// account's picture. Thirteen rows of four leaves eighteen faces, which is
+/// more local interactive accounts than a machine with a login screen on a
+/// television has; past that an account keeps its initial, which is what every
+/// account without a published picture shows anyway.
 ///
-/// Three rows more than the drawings and the faces alone needed. The letters
+/// Five rows more than the drawings and the faces alone needed. The letters
 /// could have been packed into the faces' band instead, and are deliberately
 /// not: an account's picture arriving would then decide whether the clock had a
 /// cell, and a login screen with seventeen accounts on it would be one with no
 /// time on it.
-const ATLAS_ROWS: u32 = 11;
+///
+/// It is **the face count that fixes this number**, not the drawings. The
+/// legend's five marks pushed the letters and the faces five cells down the
+/// atlas, and a row kept at eleven would have answered by quietly taking five
+/// accounts' pictures away — a login screen where the sixth account down the
+/// carousel lost its face because a row of button hints had been added to the
+/// column. Two more rows is a megabyte of atlas; it is the cheaper of the two.
+const ATLAS_ROWS: u32 = 13;
 pub const MAX_FACES: usize = (ATLAS_COLUMNS * ATLAS_ROWS - FACE_SLOT) as usize;
 
 /// The square a portrait has to arrive at to go in a cell.
@@ -1198,13 +1217,13 @@ fn pipeline<'a>(
 ///
 /// Every one of them is a *shape*: the cell holds how far each pixel of it is
 /// from the nearest edge of the mark, and the shader builds the material out of
-/// that — see [`field`], which is where a drawing is made and measured. Ten are
-/// `lxb-desktop`'s own files, byte for byte from `<svg` on: the four arrow caps,
-/// the two controller hints, the keyboard's close key, and its power, cycle and
-/// display marks under this repository's names. The other three are drawn here
-/// in the same language. See the guard below, which is the shell's, and which is
-/// what keeps a new one from arriving as a picture.
-const GLYPHS: [(u32, &[u8]); 13] = [
+/// that — see [`field`], which is where a drawing is made and measured. Fifteen
+/// are `lxb-desktop`'s own files, byte for byte from `<svg` on: the four arrow
+/// caps, its five pad buttons, its two keycaps, the keyboard's close key, and
+/// its power, cycle and display marks under this repository's names. The other
+/// three are drawn here in the same language. See the guard below, which is the
+/// shell's, and which is what keeps a new one from arriving as a picture.
+const GLYPHS: [(u32, &[u8]); 18] = [
     (
         ARROW_LEFT_SLOT,
         include_bytes!("../../assets/glyphs/arrow-left.svg").as_slice(),
@@ -1256,6 +1275,26 @@ const GLYPHS: [(u32, &[u8]); 13] = [
     (
         KEYBOARD_SHOW_SLOT,
         include_bytes!("../../assets/glyphs/keyboard-show.svg").as_slice(),
+    ),
+    (
+        PAD_SOUTH_SLOT,
+        include_bytes!("../../assets/glyphs/pad-south.svg").as_slice(),
+    ),
+    (
+        PAD_EAST_SLOT,
+        include_bytes!("../../assets/glyphs/pad-east.svg").as_slice(),
+    ),
+    (
+        PAD_NORTH_SLOT,
+        include_bytes!("../../assets/glyphs/pad-north.svg").as_slice(),
+    ),
+    (
+        KEY_ENTER_SLOT,
+        include_bytes!("../../assets/glyphs/key-enter.svg").as_slice(),
+    ),
+    (
+        KEY_ESCAPE_SLOT,
+        include_bytes!("../../assets/glyphs/key-escape.svg").as_slice(),
     ),
 ];
 
@@ -1921,10 +1960,11 @@ pub(crate) mod tests {
     fn every_glyph_ships_as_the_shape_of_itself() {
         assert_eq!(
             GLYPHS.len(),
-            13,
+            18,
             "four arrow caps, two controller hints, the keyboard's close key \
              and the button that raises it, the three machine actions, the \
-             route to an account that was not listed, and the session badge"
+             route to an account that was not listed, the session badge, and \
+             the five buttons the legend draws"
         );
         let flat: Vec<u32> = GLYPHS
             .iter()
@@ -1953,8 +1993,8 @@ pub(crate) mod tests {
             }
         }
 
-        // Thirteen exact transforms over a 1024-square grid is the whole cost of
-        // this test, and they are thirteen separate problems. As many at a time
+        // Eighteen exact transforms over a 1024-square grid is the whole cost of
+        // this test, and they are eighteen separate problems. As many at a time
         // as the machine has cores and no more: each holds three grids of its
         // own, and all of them at once is a gigabyte.
         let at_once = std::thread::available_parallelism()
