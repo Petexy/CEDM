@@ -20,8 +20,8 @@ ExclusiveArch:  x86_64 aarch64
 
 %global greeter_account cedm-greeter
 
-BuildRequires:  cargo >= 1.85
-BuildRequires:  rust >= 1.85
+BuildRequires:  cargo >= 1.89
+BuildRequires:  rust >= 1.89
 BuildRequires:  gcc
 BuildRequires:  pkgconfig
 BuildRequires:  pkgconfig(libudev)

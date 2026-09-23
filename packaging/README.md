@@ -149,8 +149,11 @@ follows).
 
 ## Debian
 
-Build on Debian, Ubuntu, or another Debian-derived system with `dpkg-dev` and
-the development packages listed in the main README:
+Build on Debian, Ubuntu, or another Debian-derived system. The builder checks
+everything it needs before compiling and names whatever is missing in one
+`apt install` line — Rust among it as `rustup`, because Debian 13's own is
+older than the locked graph allows. A distrobox or toolbox container on a plain
+`debian` image is enough:
 
 ```sh
 ./packaging/build.sh debian
@@ -161,6 +164,10 @@ policy-shaped binary package with `conffiles`, `md5sums` and maintainer scripts,
 and writes it to `packaging/out/debian/`. Wayland, EGL and X11 libraries that
 the greeter opens dynamically are declared explicitly because ELF dependency
 scanning cannot see them.
+
+It compiles into `target/debian` rather than `target/` (or into
+`$CARGO_TARGET_DIR` when that is set), so a build in a container that shares
+the checkout never replaces the host's own binaries.
 
 `postinst` runs `systemd-sysusers` and then `systemd-tmpfiles` — in that order,
 because the home directory's ownership cannot be resolved before the account
@@ -184,10 +191,12 @@ against another distribution's libc must not be deployed on Debian.
 
 ## Fedora
 
-Build on Fedora with `rpm-build`, `cargo`, `systemd-rpm-macros` and the
-`pkgconfig()` build requirements the spec lists:
+Build on Fedora with the RPM tools and what the spec asks for, which
+`dnf builddep` reads from the spec itself:
 
 ```sh
+sudo dnf install rpm-build dnf5-plugins git-core
+sudo dnf builddep packaging/fedora/cedm.spec
 ./packaging/build.sh fedora
 ```
 

@@ -179,19 +179,63 @@ GREETER="$(dirname -- "$0")/cedm"
 # What the login screen brings the displays up in: the last signed-in account's
 # published look, written out as a compositor configuration.
 #
-# A failure here is not a reason to stop. The file is display settings, and a
-# compositor started without one brings every screen up the way it would have
-# anyway — which is what every login screen did before this existed.
-COMPOSITOR_CONFIG="$XDG_STATE_HOME/console-experience-desktop-manager/greeter-compositor.toml"
+# The comment that used to stand here said a failure to write it was not a
+# reason to stop, because a compositor started without one brings every screen
+# up the way it would have anyway. That was never true of this one.
+# `general.shell` lives in this file — it is the whole of how `lxb --shell` is
+# told to start the greeter rather than LineXinBar's own desktop — and `lxb`
+# refuses a `--config` naming a path that is not there. So a greeter that
+# cannot write this file does not start; greetd finds a greeter that exited
+# without creating a session and exits itself; the unit restarts a second
+# later, three times over, and the fourth is refused by the start limit it
+# keeps for a machine whose GPU is misconfigured. The far end of that is a
+# console with no login screen on it until somebody reaches a TTY and starts
+# the service by hand.
+#
+# That is not a hypothetical. Twice in one evening, a LineXinBar session
+# signing out left the greeter's write of this file returning ENOSPC, and
+# everything above followed from it — with 26 GB free on the filesystem both
+# times, so whatever the kernel was refusing was transient and was not the
+# disk simply being full. It does not matter which it was. A login screen must
+# not be one write away from being gone.
+#
+# There is nothing to start without this file, so the fix is to stop asking
+# that filesystem for it at all. It is not a remembered anything. It is written
+# afresh from the published look at every login screen, read once by the
+# compositor that login screen runs on, and of no use to anybody afterwards —
+# so it belongs in the runtime directory logind makes for this greeter session
+# and takes away with it, which is a tmpfs and has no disk to run out of.
+#
+# The state home stays as the second place to try, for a greeter session that
+# somehow has no runtime directory. It is the path this always used, so a
+# machine in that position behaves exactly as it did before.
+RUNTIME_COMPOSITOR_CONFIG=""
+if [ -n "${XDG_RUNTIME_DIR-}" ]; then
+    RUNTIME_COMPOSITOR_CONFIG="$XDG_RUNTIME_DIR/cedm/greeter-compositor.toml"
+fi
+STATE_COMPOSITOR_CONFIG="$XDG_STATE_HOME/console-experience-desktop-manager/greeter-compositor.toml"
 
 start_lxb() {
     # Standard output is the wallpaper record; everything the greeter has to
     # say about writing the file goes to the journal with the rest of the
     # output above. An empty answer is a machine whose monotonic clock or boot
     # id could not be read, which is a compositor left to its own background.
-    if ! wallpaper="$("$GREETER" --compositor-config "$COMPOSITOR_CONFIG" -- "$@")"; then
-        echo "cedm: could not write $COMPOSITOR_CONFIG; starting without it." >&2
-        rm -f "$COMPOSITOR_CONFIG"
+    COMPOSITOR_CONFIG=""
+    wallpaper=""
+    for candidate in "$RUNTIME_COMPOSITOR_CONFIG" "$STATE_COMPOSITOR_CONFIG"; do
+        [ -n "$candidate" ] || continue
+        if wallpaper="$("$GREETER" --compositor-config "$candidate" -- "$@")"; then
+            COMPOSITOR_CONFIG="$candidate"
+            break
+        fi
+        # Half of a file is worse than none of one: it names displays this
+        # greeter is not going to be started with, and the compositor that
+        # reads it next has no way to tell it was interrupted.
+        echo "cedm: could not write $candidate." >&2
+        rm -f "$candidate"
+    done
+    if [ -z "$COMPOSITOR_CONFIG" ]; then
+        echo "cedm: nowhere left to write the compositor configuration." >&2
         return 1
     fi
     # Which wallpaper that compositor draws before this greeter has a window,
