@@ -737,6 +737,7 @@ mod tests {
             scene_ns: 7_500_000_000,
             accent: "Blue".into(),
             theme: None,
+            particles: None,
         }
     }
 

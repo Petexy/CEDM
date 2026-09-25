@@ -83,7 +83,7 @@ pub const LEGACY_THEME_KEY: &str = "theme";
 ///
 /// This is LineXinBar's `wallpaper::Style` under another name, because this
 /// program vendors that scene rather than depending on the crate. The two
-/// spellings and their meanings have to match; `lxb-wallpaper-v2` covers both
+/// spellings and their meanings have to match; `lxb-wallpaper-v6` covers both
 /// materials, since either end of a handover reads the same key and draws what
 /// it says.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

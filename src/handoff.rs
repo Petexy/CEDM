@@ -12,10 +12,10 @@ use std::time::{Duration, Instant};
 
 pub const ENV: &str = "LXB_BACKGROUND_HANDOFF";
 pub const VERSION: &str = "1";
-pub const VISUAL: &str = "lxb-wallpaper-v2";
+pub const VISUAL: &str = "lxb-wallpaper-v6";
 const MAX_ENCODED_BYTES: usize = 1024;
 const MAX_HANDOFF_AGE_NS: u64 = 30_000_000_000;
-const REQUIRED_FIELDS: u8 = 0b0111_1111;
+const REQUIRED_FIELDS: u16 = 0b0111_1111;
 /// What an anchor file may be, in bytes. It is one short line.
 const MAX_ANCHOR_BYTES: u64 = 4096;
 
@@ -122,11 +122,16 @@ impl SceneClock {
     }
 
     /// Capture the scene and timestamp from one raw-clock sample.
-    pub fn capture(&self, accent: &str, theme: Option<&str>) -> Option<BackgroundHandoff> {
+    pub fn capture(
+        &self,
+        accent: &str,
+        theme: Option<&str>,
+        particles: Option<bool>,
+    ) -> Option<BackgroundHandoff> {
         let origin_ns = self.monotonic_origin_ns?;
         let sample_ns = monotonic_ns()?;
         let scene_ns = sample_ns.checked_sub(origin_ns)?;
-        BackgroundHandoff::from_sample(boot_id()?, sample_ns, scene_ns, accent, theme)
+        BackgroundHandoff::from_sample(boot_id()?, sample_ns, scene_ns, accent, theme, particles)
     }
 }
 
@@ -266,6 +271,15 @@ pub struct BackgroundHandoff {
     /// what keeps the wire unchanged across the split: a greeter and a session
     /// on either side of it still exchange byte-for-byte the same record.
     pub theme: Option<String>,
+    /// Whether the wallpaper's current is carrying its sparkles — the shell's
+    /// Theme > Particles — written `on` or `off`.
+    ///
+    /// Optional, and for the reader `theme` is for, on the same argument: the
+    /// compositor in front of this greeter cannot read the account's own
+    /// settings, and without this it would draw the sparkles as the greeter's
+    /// account has them — none — in front of a login screen that carries them,
+    /// or the other way round. The shell reads its own and ignores this.
+    pub particles: Option<bool>,
 }
 
 impl BackgroundHandoff {
@@ -275,6 +289,7 @@ impl BackgroundHandoff {
         scene_ns: u64,
         accent: &str,
         theme: Option<&str>,
+        particles: Option<bool>,
     ) -> Option<Self> {
         Some(Self {
             boot_id,
@@ -282,6 +297,7 @@ impl BackgroundHandoff {
             scene_ns,
             accent: accent::canonical(accent)?.to_string(),
             theme: theme.and_then(accent::canonical_theme).map(str::to_string),
+            particles,
         })
     }
 
@@ -294,6 +310,13 @@ impl BackgroundHandoff {
         // theme is byte for byte the record this program has always written.
         if let Some(theme) = &self.theme {
             record.push_str(&format!(";theme={theme}"));
+        }
+        if let Some(particles) = self.particles {
+            record.push_str(if particles {
+                ";particles=on"
+            } else {
+                ";particles=off"
+            });
         }
         record
     }
@@ -314,7 +337,8 @@ impl BackgroundHandoff {
         let mut scene_ns = None;
         let mut accent = None;
         let mut theme = None;
-        let mut seen = 0_u8;
+        let mut particles = None;
+        let mut seen = 0_u16;
         for part in value.split(';') {
             let (key, value) = part.split_once('=')?;
             if key.is_empty() || value.is_empty() {
@@ -349,12 +373,20 @@ impl BackgroundHandoff {
                     accent = accent::canonical(value).map(str::to_string);
                     1 << 6
                 }
-                // The one optional field, so it is not in `REQUIRED_FIELDS`. Its
-                // bit is still taken, which is what refuses a record that says
-                // it twice.
+                // The two optional fields, so they are not in `REQUIRED_FIELDS`.
+                // Their bits are still taken, which is what refuses a record that
+                // says either twice.
                 "theme" => {
                     theme = accent::canonical_theme(value).map(str::to_string);
                     1 << 7
+                }
+                "particles" => {
+                    particles = match value {
+                        "on" => Some(true),
+                        "off" => Some(false),
+                        _ => None,
+                    };
+                    1 << 8
                 }
                 _ => return None,
             };
@@ -373,6 +405,7 @@ impl BackgroundHandoff {
             scene_ns: scene_ns?,
             accent: accent?,
             theme,
+            particles,
         })
     }
 
@@ -445,12 +478,13 @@ mod tests {
             scene_ns: 42_000_000_000,
             accent: "Blue".to_string(),
             theme: None,
+            particles: None,
         };
         let parsed = BackgroundHandoff::parse(&state.encode()).unwrap();
         assert_eq!(parsed, state);
         assert_eq!(
             state.encode(),
-            "v=1;visual=lxb-wallpaper-v2;clock=linux-monotonic;boot=01234567-89ab-cdef-0123-456789abcdef;sample-ns=10000000000;scene-ns=42000000000;accent=Blue"
+            "v=1;visual=lxb-wallpaper-v6;clock=linux-monotonic;boot=01234567-89ab-cdef-0123-456789abcdef;sample-ns=10000000000;scene-ns=42000000000;accent=Blue"
         );
         assert_eq!(
             parsed.scene_time(BOOT, 10_250_000_000),
@@ -476,10 +510,11 @@ mod tests {
             scene_ns: 42_000_000_000,
             accent: "Blue".to_string(),
             theme: Some("Simple".to_string()),
+            particles: None,
         };
         assert_eq!(
             plain.encode(),
-            "v=1;visual=lxb-wallpaper-v2;clock=linux-monotonic;boot=01234567-89ab-cdef-0123-456789abcdef;sample-ns=10000000000;scene-ns=42000000000;accent=Blue;theme=Simple"
+            "v=1;visual=lxb-wallpaper-v6;clock=linux-monotonic;boot=01234567-89ab-cdef-0123-456789abcdef;sample-ns=10000000000;scene-ns=42000000000;accent=Blue;theme=Simple"
         );
         assert_eq!(
             BackgroundHandoff::parse(&plain.encode()),
@@ -501,6 +536,48 @@ mod tests {
         assert_eq!(BackgroundHandoff::parse(&odd).and_then(|r| r.theme), None);
         // Said twice, though, and it is a broken record.
         assert!(BackgroundHandoff::parse(&format!("{};theme=Default", plain.encode())).is_none());
+    }
+
+    /// Whether the current was carrying its sparkles travels the way the
+    /// material does, after it, and a record silent about it is still the
+    /// record an older greeter wrote.
+    #[test]
+    fn the_sparkles_travel_with_the_material_and_are_optional() {
+        let lit = BackgroundHandoff {
+            boot_id: BOOT.to_string(),
+            sample_ns: 10_000_000_000,
+            scene_ns: 42_000_000_000,
+            accent: "Blue".to_string(),
+            theme: Some("Default".to_string()),
+            particles: Some(true),
+        };
+        assert_eq!(
+            lit.encode(),
+            "v=1;visual=lxb-wallpaper-v6;clock=linux-monotonic;boot=01234567-89ab-cdef-0123-456789abcdef;sample-ns=10000000000;scene-ns=42000000000;accent=Blue;theme=Default;particles=on"
+        );
+        assert_eq!(BackgroundHandoff::parse(&lit.encode()), Some(lit.clone()));
+
+        let dark = BackgroundHandoff {
+            particles: Some(false),
+            ..lit.clone()
+        };
+        assert!(dark.encode().ends_with(";particles=off"));
+        assert_eq!(BackgroundHandoff::parse(&dark.encode()), Some(dark.clone()));
+
+        let quiet = BackgroundHandoff {
+            particles: None,
+            ..lit.clone()
+        };
+        assert!(!quiet.encode().contains("particles"));
+
+        // Anything but the two answers is no answer, not a broken record; said
+        // twice, it is one.
+        let odd = lit.encode().replace("particles=on", "particles=sometimes");
+        assert_eq!(
+            BackgroundHandoff::parse(&odd).map(|record| record.particles),
+            Some(None)
+        );
+        assert!(BackgroundHandoff::parse(&format!("{};particles=off", lit.encode())).is_none());
     }
 
     #[test]
@@ -540,6 +617,7 @@ mod tests {
             scene_ns: u64::MAX,
             accent: "Blue".to_string(),
             theme: None,
+            particles: None,
         };
         assert_eq!(state.scene_time(BOOT, 3), None);
     }
@@ -552,6 +630,7 @@ mod tests {
             scene_ns: 4,
             accent: "Blue".to_string(),
             theme: None,
+            particles: None,
         };
         assert_eq!(
             state.scene_time(BOOT, state.sample_ns + MAX_HANDOFF_AGE_NS + 1),
@@ -566,7 +645,7 @@ mod tests {
     fn a_resumed_clock_carries_on_from_the_wallpaper_already_on_screen() {
         let compositor = SceneClock::start();
         let record = compositor
-            .capture("Blue", None)
+            .capture("Blue", None, None)
             .expect("a machine with a monotonic clock and a boot id")
             .encode();
 
@@ -598,6 +677,7 @@ mod tests {
             scene_ns: 9_000_000_000,
             accent: "Blue".to_string(),
             theme: None,
+            particles: None,
         };
         let clock = SceneClock::resume(Some(std::ffi::OsStr::new(&elsewhere.encode())));
         assert!(clock.elapsed() < Duration::from_secs(1));
@@ -715,7 +795,7 @@ mod tests {
     fn scene_clock_capture_has_one_exact_raw_clock_origin() {
         let clock = SceneClock::start();
         let origin_ns = clock.monotonic_origin_ns.expect("monotonic clock");
-        let handoff = clock.capture("Blue", None).expect("captured handoff");
+        let handoff = clock.capture("Blue", None, None).expect("captured handoff");
         assert_eq!(
             handoff.sample_ns.checked_sub(handoff.scene_ns),
             Some(origin_ns)

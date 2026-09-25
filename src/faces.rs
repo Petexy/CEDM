@@ -151,7 +151,7 @@ fn to_rgba(raw: &[u8], colour: png::ColorType) -> Option<Vec<u8>> {
             } else {
                 (pixel[0], pixel[1], pixel[2])
             };
-            let alpha = if channels % 2 == 0 {
+            let alpha = if channels.is_multiple_of(2) {
                 pixel[channels - 1]
             } else {
                 255
@@ -415,8 +415,8 @@ mod tests {
         let rgba = load(&path, 32).expect("a PNG this can decode");
         assert_eq!(rgba.len(), 32 * 32 * 4);
         // Every pixel is from the middle, because the crop took the middle.
-        for pixel in rgba.chunks_exact(4) {
-            assert_eq!(pixel, [200, 40, 60, 255]);
+        for pixel in rgba.as_chunks::<4>().0 {
+            assert_eq!(*pixel, [200, 40, 60, 255]);
         }
     }
 
@@ -437,7 +437,7 @@ mod tests {
             }),
         );
         let rgba = load(&path, 16).unwrap();
-        for pixel in rgba.chunks_exact(4) {
+        for pixel in rgba.as_chunks::<4>().0 {
             assert!(
                 (100..=155).contains(&pixel[0]),
                 "a checkerboard averaged to {}, which is a sample and not a mean",
@@ -470,8 +470,8 @@ mod tests {
         let path = written(&directory, "alex", &out);
         let rgba = load(&path, 4).unwrap();
         assert_eq!(rgba.len(), 4 * 4 * 4);
-        for pixel in rgba.chunks_exact(4) {
-            assert_eq!(pixel, [128, 128, 128, 255]);
+        for pixel in rgba.as_chunks::<4>().0 {
+            assert_eq!(*pixel, [128, 128, 128, 255]);
         }
     }
 }

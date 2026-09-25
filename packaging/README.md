@@ -1,7 +1,7 @@
 # CEDM packaging
 
 These definitions build one early-development package named
-`cedm`. The package version is **0.9.0**, which is
+`cedm`. The package version is **0.9.1**, which is
 the crate's own version: what a package claims and what
 `cedm --version` reports are the same number, and
 `packaging/build.sh check` refuses to let the two drift apart. Bumping a release

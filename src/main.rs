@@ -551,6 +551,11 @@ fn answer(action: Action, on_board: bool, before: Doing, after: Doing) -> Answer
 struct Materials {
     wallpaper: String,
     icons: String,
+    /// Whether the wallpaper's current carries its sparkles — the shell's
+    /// Theme > Particles. Carried with the two materials because the shell's
+    /// Theme page previews and restores all three together, and this screen
+    /// shows them together as it moves from one account to the next.
+    particles: bool,
 }
 
 impl Default for Materials {
@@ -558,6 +563,7 @@ impl Default for Materials {
         Self {
             wallpaper: cedm::accent::DEFAULT_THEME.to_string(),
             icons: cedm::accent::DEFAULT_THEME.to_string(),
+            particles: true,
         }
     }
 }
@@ -579,6 +585,7 @@ impl Materials {
         for part in visual::theme::PARTS {
             visual::theme::preview_style(part, self.of(part));
         }
+        visual::theme::preview_particles(self.particles);
     }
 
     /// The startup path, where the account the screen opens on is known before
@@ -587,6 +594,7 @@ impl Materials {
         for part in visual::theme::PARTS {
             visual::theme::set_style(part, self.of(part));
         }
+        visual::theme::set_particles(self.particles);
     }
 }
 
@@ -608,6 +616,9 @@ struct PendingAttempt {
     /// nothing else. The marks are the shell's own business and it reads its own
     /// settings for them.
     wallpaper_material: String,
+    /// Whether that wallpaper was carrying its sparkles, captured for the same
+    /// reason and going to the same reader.
+    particles: bool,
 }
 
 /// What was typed before there was anywhere to put it, and which attempt it
@@ -1131,6 +1142,7 @@ impl Application {
             session_id: session.id.clone(),
             accent: self.accent.clone(),
             wallpaper_material: self.material.wallpaper.clone(),
+            particles: self.material.particles,
         });
         self.transition_to(Stage::Busy(
             cedm::i18n::text().starting_authentication.to_string(),
@@ -2201,13 +2213,16 @@ impl Application {
                             pending.id,
                             pending.accent.clone(),
                             pending.wallpaper_material.clone(),
+                            pending.particles,
                         )
                     })
             }
             _ => None,
         };
-        if let Some((attempt, accent, material)) = start_request {
-            let handoff = self.wallpaper_clock.capture(&accent, Some(&material));
+        if let Some((attempt, accent, material, particles)) = start_request {
+            let handoff = self
+                .wallpaper_clock
+                .capture(&accent, Some(&material), Some(particles));
             if !self
                 .auth
                 .as_ref()
@@ -2816,7 +2831,7 @@ fn write_compositor_config(path: &Path, greeter_arguments: &[String]) -> anyhow:
     Ok(Written {
         // The wallpaper's half alone: what this record is for is a compositor
         // with no client yet, and what it draws is a wallpaper.
-        wallpaper: greeter_wallpaper(&accent, &theme.wallpaper),
+        wallpaper: greeter_wallpaper(&accent, &theme),
         accent: Some(accent),
         account,
     })
@@ -2922,7 +2937,8 @@ struct Written {
 /// here is the greeter's own, which has no shell settings and no LineXinBar
 /// and never will. Left to itself it would draw the default purple under a
 /// login screen the user has set to blue, and put a purple flash at the very
-/// handover this is meant to make invisible.
+/// handover this is meant to make invisible. The wallpaper's material and its
+/// sparkles go with the accent, for the same reason.
 ///
 /// The scene carries on rather than starting at zero, because on every login
 /// screen but the first of a boot something did come before it: the session
@@ -2931,14 +2947,14 @@ struct Written {
 /// rest continue it, and the greeter picks the clock up from here either way —
 /// see [`cedm::handoff::SceneClock::of_this_boot`] and
 /// [`cedm::handoff::SceneClock::resume`].
-fn greeter_wallpaper(accent: &str, theme: &str) -> Option<String> {
+fn greeter_wallpaper(accent: &str, theme: &Materials) -> Option<String> {
     let clock = match cedm::state::wallpaper_clock_path() {
         Some(path) => cedm::handoff::SceneClock::of_this_boot(&path),
         // Nowhere to keep an anchor. The login screen still comes up and its
         // wallpaper still moves; it just starts the animation over.
         None => cedm::handoff::SceneClock::start(),
     };
-    let record = clock.capture(accent, Some(theme))?;
+    let record = clock.capture(accent, Some(&theme.wallpaper), Some(theme.particles))?;
     Some(record.encode())
 }
 
@@ -2969,6 +2985,7 @@ fn user_theme_for_the_login_screen(account: Option<&str>, look: &cedm::look::Loo
         .unwrap_or_else(|| Materials {
             wallpaper: named_or_default(look.theme(visual::theme::Part::Wallpaper)),
             icons: named_or_default(look.theme(visual::theme::Part::Icons)),
+            particles: look.particles(),
         })
 }
 
@@ -3038,6 +3055,11 @@ fn user_theme(state: &State, user: &User) -> Materials {
     Materials {
         wallpaper: of(visual::theme::Part::Wallpaper),
         icons: of(visual::theme::Part::Icons),
+        // Only ever the published copy: the broker's state predates the setting
+        // and has no word about it, and a look that says nothing leaves them on.
+        particles: cedm::look::published(&user.name, user.uid)
+            .map(|look| look.particles())
+            .unwrap_or(true),
     }
 }
 
@@ -3356,6 +3378,8 @@ mod tests {
                 // in a readable file two directories away and does not appear.
                 wallpaper: "Default".to_string(),
                 icons: "Default".to_string(),
+                // Nothing published, so nothing said, and the sparkles stay.
+                particles: true,
             }
         );
 

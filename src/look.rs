@@ -132,6 +132,16 @@ pub struct Look {
     pub theme_wallpaper: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme_icons: Option<String>,
+    /// Whether the account's wallpaper carries its sparkles — the shell's
+    /// Theme > Particles, `theme-particles` in `shell.toml`, `true` or `false`.
+    ///
+    /// Carried for the theme's reason: the sparkles are part of the wallpaper
+    /// this screen draws, and an account that turned them off would otherwise
+    /// see them on exactly one screen of its machine. A look that says nothing
+    /// leaves them on, which is what the shell does with a silent file. See
+    /// [`Look::particles`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme_particles: Option<bool>,
     /// What the two above were written under before they were two settings.
     ///
     /// Read where a half has nothing of its own, and published again where it is
@@ -317,6 +327,12 @@ impl Look {
     /// default is argued.
     pub fn button_hints(&self) -> bool {
         self.button_hints.unwrap_or(true)
+    }
+
+    /// Whether this account's wallpaper carries its sparkles. A look that says
+    /// nothing leaves them on — see [`Look::theme_particles`] the field.
+    pub fn particles(&self) -> bool {
+        self.theme_particles.unwrap_or(true)
     }
 
     /// Whether the pad is the control this account last reached for. A look
@@ -1302,6 +1318,32 @@ Music = "modified-newest-first"
         let silent = toml::to_string(&Look::default()).expect("a look is written as TOML");
         assert!(
             !silent.contains("button-hints") && !silent.contains("controller-in-hand"),
+            "a look that says nothing writes nothing: {silent}"
+        );
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    /// The shell's Theme > Particles survives the same round trip, and a look
+    /// that says nothing — every look published before the setting existed —
+    /// leaves the sparkles on, which is what the shell does with that silence.
+    #[test]
+    fn the_particles_are_carried_and_silence_leaves_them_on() {
+        let home = home_with("theme-particles = false\n", None);
+        let look = Look::read(&home, None);
+        assert!(!look.particles(), "the file says they are off");
+
+        let published = toml::to_string(&look).expect("a look is written as TOML");
+        assert!(published.contains("theme-particles = false"), "{published}");
+        let back: Look = toml::from_str(&published).expect("and read back");
+        assert!(!back.particles());
+
+        assert!(
+            Look::default().particles(),
+            "a look with nothing in it keeps them"
+        );
+        let silent = toml::to_string(&Look::default()).expect("a look is written as TOML");
+        assert!(
+            !silent.contains("theme-particles"),
             "a look that says nothing writes nothing: {silent}"
         );
         fs::remove_dir_all(home).unwrap();

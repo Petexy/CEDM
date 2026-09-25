@@ -1,5 +1,5 @@
 Name:           cedm
-Version:        0.9.0
+Version:        0.9.1
 Release:        1%{?dist}
 Summary:        Controller-first graphical display manager for console and desktop sessions
 
@@ -231,6 +231,23 @@ fi
 %config(noreplace) %{_sysconfdir}/%{name}/greetd.toml
 
 %changelog
+* Thu Sep 24 2026 Piotr Lewandowski <piotr.petexy@gmail.com> - 0.9.1-1
+- Released with LineXinBar 0.9.1. What is new since 0.9.0:
+- The current carries the shell's sparkles, and an account's Theme > Particles
+  decides whether its login screen draws them and hands the answer over.
+- The on-screen board is a picture of the keyboard the account being looked at
+  types on, and the hour over the password field is written on that account's
+  clock, twelve hours or twenty-four.
+- The button legend in the wallpaper's corner, as the shell writes it, and off
+  when the account has Button hints off.
+- A security pass: nothing is read out of a home directory any more, only the
+  look an account publishes, and that is opened as a file or not at all; a
+  password is never drawn in the clear, written to disk or left in freed
+  memory; and one failed write no longer leaves the machine with no login
+  screen.
+- Every message in all nine languages, a demo mode for screenshots that shows
+  nobody's account, and a package build that says what it lacks.
+
 * Sun Aug 30 2026 Piotr Lewandowski <piotr.petexy@gmail.com> - 0.9.0-1
 - Thirty-two commits on from the first package. What is new since 0.1.0:
 - The greeter is drawn in LineXinBar's own material: every mark is a shape with

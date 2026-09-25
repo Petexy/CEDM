@@ -527,8 +527,10 @@ mod tests {
         let mut raw = Vec::new();
         file.read_to_end(&mut raw).expect("the ramp reads back");
         assert_eq!(raw.len(), size as usize * 3 * 2);
-        raw.chunks_exact(2)
-            .map(|pair| u16::from_ne_bytes([pair[0], pair[1]]))
+        raw.as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| u16::from_ne_bytes(*pair))
             .collect()
     }
 }

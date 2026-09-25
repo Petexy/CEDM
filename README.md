@@ -4,7 +4,7 @@
 and for ordinary Linux desktop sessions.**
 
 [![Licence](https://img.shields.io/badge/licence-GPL--3.0--only-blue)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.9.0-informational)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.9.1-informational)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.89%2B-orange)](Cargo.toml)
 
 ![The login screen](docs/screen.png)

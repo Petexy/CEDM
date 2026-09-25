@@ -14,7 +14,7 @@ the login screen not knowing what colour the account signing in keeps.
 CEDM launches LineXinBar with a public, one-shot record:
 
 ```text
-LXB_BACKGROUND_HANDOFF=v=1;visual=lxb-wallpaper-v2;clock=linux-monotonic;boot=<boot-id>;sample-ns=<u64>;scene-ns=<u64>;accent=<name>
+LXB_BACKGROUND_HANDOFF=v=1;visual=lxb-wallpaper-v6;clock=linux-monotonic;boot=<boot-id>;sample-ns=<u64>;scene-ns=<u64>;accent=<name>[;theme=<Default|Simple>][;particles=<on|off>]
 ```
 
 Both projects calculate the continuing scene clock as:
@@ -52,11 +52,18 @@ implement, not a condition of being launched.
 
 ### The visual contract
 
-The vendored visual contract is named `lxb-wallpaper-v2`. It covers **both**
+The vendored visual contract is named `lxb-wallpaper-v6`. It covers **both**
 materials the shell can be set to: `Default` is the band of water and marks
 beaded out of their own shape, and `Simple` is the plainer look a slow machine
 asks for — the current as three fine glass-silk ribbons, and a mark as the flat
-shape of itself in white with the accent breathed over it.
+shape of itself in white with the accent breathed over it. In either, the current
+carries the same sparkles — glitter that appears in the middle of the ribbon,
+is pushed out of it and grows more see-through the further it goes. `v3` added
+them, `v4` loosened their hold on the ribbon, `v5` had the ribbon push them away
+and `v6` has them born in its middle and fade as they leave. They are **on**
+until an account turns them off (`theme-particles = false`, the shell's Theme >
+Particles), which this greeter honours from the published look; a look that says
+nothing leaves them on, as the shell does.
 
 The shell's Theme setting is **two** keys, and this greeter reads both, because
 it is both halves at once: it draws that wallpaper, and it draws the shell's own
@@ -74,12 +81,17 @@ changes material in front of the user. A published look — or a broker — from
 before the setting was split carries a single `theme` key, which said one thing
 about the whole shell; it is still read, and both halves take it.
 
-Only the **wallpaper's** half travels in the hand-over record, as its one
-optional field, because the reader it is written for is a compositor drawing a
+Only the **wallpaper's** half travels in the hand-over record, as an optional
+`theme` field, because the reader it is written for is a compositor drawing a
 bridge frame in front of this greeter: it runs as the greeter's own account and
 cannot read the settings of the person about to sign in, and what it draws is a
 wallpaper and never a mark. That is also what kept the record byte-for-byte
 unchanged across the split.
+
+The sparkles travel beside it, as `particles=on` or `particles=off`, for the same
+reader and the same reason — both in the record this greeter writes for its own
+compositor and in the one it hands the session. The shell accepts both fields and
+keeps to its own `shell.toml`.
 
 Any pixel-affecting shader or palette change must update both projects and bump
 that identifier. The copied files carry an origin manifest in

@@ -14,7 +14,7 @@ The following files were copied from LineXinBar (<https://github.com/Petexy/Line
 
 The two Noto faces beside them — `assets/fonts/NotoSansDevanagariUI-{Regular,Bold}.ttf` and `assets/fonts/NotoSansCJKsc-{Regular,Bold}.ttf` — are **not** LineXinBar's. They are subsets of Google's Noto Sans Devanagari UI and Noto Sans CJK SC, cut down to what this login screen draws, and they are here because CEDM says things in ten languages and the shell's Roboto has no Devanagari and no Han in it. They keep their own licence, `assets/fonts/LICENSE-NotoSans.txt` (SIL Open Font License 1.1); neither family declares a Reserved Font Name, so the subsets keep their original names. See "What it says, and in which language" in the README.
 
-`lxb-wallpaper-v2` is the compatibility ABI for the shader, palette uniforms, coordinate system, linear-light colour handling and monotonic scene clock. Bump it in both repositories whenever those pixels or semantics change.
+`lxb-wallpaper-v6` is the compatibility ABI for the shader, palette uniforms, coordinate system, linear-light colour handling and monotonic scene clock. Bump it in both repositories whenever those pixels or semantics change.
 
 ## The four recordings
 
@@ -92,7 +92,7 @@ transparent texel here, beside the empty scenery that is there for the same
 reason: `wallpaper` stays the shell's function verbatim, which is the whole
 contract, and the branch it feeds is never taken.
 
-`lxb-wallpaper-v2` is untouched by that. Nothing about the pixels either program
+`lxb-wallpaper-v6` is untouched by that. Nothing about the pixels either program
 draws for `Default` or `Simple` changed, and a machine set to the third value
 hands over exactly the frame it would have handed over before it existed.
 

@@ -92,7 +92,12 @@ pub const DEPTH: f32 = 0.075;
 pub fn of_drawing(drawing: &[u8], size: u32) -> Option<Vec<u8>> {
     let fine = size.checked_mul(SDF_SUPERSAMPLE)?;
     let coverage = super::rasterise_svg(drawing, fine)?;
-    let inside: Vec<bool> = coverage.chunks_exact(4).map(|px| px[3] >= 128).collect();
+    let inside: Vec<bool> = coverage
+        .as_chunks::<4>()
+        .0
+        .iter()
+        .map(|px| px[3] >= 128)
+        .collect();
     distance_field(&inside, fine, size)
 }
 

@@ -307,8 +307,10 @@ struct Globals {
     /// asked for. `x` is the wallpaper — the band of water against the glass-silk
     /// ribbons — and `y` is every mark, beaded out of its own shape against the
     /// flat shape itself. Two numbers because they are two settings, and the pair
-    /// costs nothing here: a uniform block is laid out in sixteen-byte lots, so
-    /// the other two are spare.
+    /// costs nothing here: a uniform block is laid out in sixteen-byte lots.
+    /// `z` is never written — it is the shape of a picture this program does not
+    /// draw — and `w` is one where the account has turned the sparkles on,
+    /// under the shell's Theme > Particles. See [`theme::particles_flag`].
     style: [f32; 4],
 }
 
@@ -734,7 +736,7 @@ impl Renderer {
                     theme::style_flag(theme::Part::Wallpaper),
                     theme::style_flag(theme::Part::Icons),
                     0.0,
-                    0.0,
+                    theme::particles_flag(),
                 ],
             }),
         );
@@ -953,7 +955,7 @@ impl Renderer {
             self.config.format,
             wgpu::TextureFormat::Rgba8Unorm | wgpu::TextureFormat::Rgba8UnormSrgb
         ) {
-            for pixel in pixels.chunks_exact_mut(4) {
+            for pixel in pixels.as_chunks_mut::<4>().0 {
                 pixel.swap(0, 2);
             }
         }
@@ -1407,7 +1409,7 @@ fn rasterise_svg(data: &[u8], size: u32) -> Option<Vec<u8>> {
     let transform = tiny_skia::Transform::from_translate(dx, dy).pre_scale(scale, scale);
     resvg::render(&tree, transform, &mut pixmap.as_mut());
     let mut rgba = pixmap.take();
-    for pixel in rgba.chunks_exact_mut(4) {
+    for pixel in rgba.as_chunks_mut::<4>().0 {
         let alpha = pixel[3] as u32;
         for channel in &mut pixel[..3] {
             *channel = (*channel as u32 * 255 + alpha / 2)
@@ -1983,7 +1985,7 @@ pub(crate) mod tests {
             let painted = rasterise_svg(svg, CELL).unwrap_or_else(|| {
                 panic!("slot {slot} did not rasterise");
             });
-            for pixel in painted.chunks_exact(4).filter(|px| px[3] > 0) {
+            for pixel in painted.as_chunks::<4>().0.iter().filter(|px| px[3] > 0) {
                 assert_eq!(
                     &pixel[..3],
                     &[255, 255, 255],
