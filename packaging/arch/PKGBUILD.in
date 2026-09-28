@@ -6,7 +6,7 @@ pkgrel=1
 pkgdesc='Controller-first graphical display manager for console and desktop sessions'
 arch=('x86_64' 'aarch64')
 url='https://github.com/petexy/ConsoleExperienceDesktopManager'
-license=('GPL-3.0-only' 'Apache-2.0')
+license=('GPL-3.0-only' 'Apache-2.0' 'MIT')
 depends=(
     # greetd owns PAM and the sessions it starts; CEDM is its greeter and its
     # configuration, and is not a display manager without it.
@@ -95,6 +95,11 @@ package() {
         "$pkgdir/usr/share/licenses/$pkgname/Roboto-Apache-2.0.txt"
     install -Dm0644 assets/fonts/LICENSE-NotoSans.txt \
         "$pkgdir/usr/share/licenses/$pkgname/NotoSans-OFL-1.1.txt"
+    # GilRs, which the login screen reads its controllers through and which is
+    # carried in this tree for a fix of its own. Dual-licensed; MIT is the
+    # notice carried.
+    install -Dm0644 third_party/lxb-gilrs/LICENSE-MIT \
+        "$pkgdir/usr/share/licenses/$pkgname/GilRs-MIT.txt"
     install -Dm0644 README.md "$pkgdir/usr/share/doc/$pkgname/README.md"
     install -Dm0644 contrib/config.toml.example \
         "$pkgdir/usr/share/doc/$pkgname/config.example.toml"

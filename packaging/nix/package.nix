@@ -121,6 +121,8 @@ rustPlatform.buildRustPackage {
       "$out/share/licenses/cedm/Roboto-Apache-2.0.txt"
     install -Dm0644 assets/fonts/LICENSE-NotoSans.txt \
       "$out/share/licenses/cedm/NotoSans-OFL-1.1.txt"
+    install -Dm0644 third_party/lxb-gilrs/LICENSE-MIT \
+      "$out/share/licenses/cedm/GilRs-MIT.txt"
     install -Dm0644 README.md \
       "$out/share/doc/cedm/README.md"
     install -Dm0644 contrib/config.toml.example \
@@ -144,7 +146,7 @@ rustPlatform.buildRustPackage {
   meta = {
     description = "Controller-first graphical display manager for console and desktop sessions";
     homepage = "https://github.com/petexy/ConsoleExperienceDesktopManager";
-    license = with lib.licenses; [ gpl3Only asl20 ];
+    license = with lib.licenses; [ gpl3Only asl20 mit ];
     mainProgram = "cedm";
     platforms = lib.platforms.linux;
   };

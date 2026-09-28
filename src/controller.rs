@@ -286,3 +286,147 @@ mod tests {
         assert_eq!(merge_sticks((0.0, 0.0), (0.0, 0.0)), (0.0, 0.0));
     }
 }
+
+/// GilRs itself, against pads that exist.
+///
+/// A login screen reads controllers through LineXinBar's copy of GilRs, which
+/// fixes one thing in the published crate: its Linux backend read one hot-plug
+/// event per wake-up and left the rest for the next hot-plug to find, so the
+/// second of two pads that changed together was never seen to change. See
+/// `third_party/lxb-gilrs-core/README.LXB.md`.
+///
+/// Skipped, rather than failed, where `/dev/uinput` cannot be opened.
+#[cfg(test)]
+mod hot_plug {
+    use std::time::{Duration, Instant};
+
+    use evdev::uinput::VirtualDevice;
+    use evdev::{
+        AbsInfo, AbsoluteAxisCode, AttributeSet, BusType, InputId, KeyCode, KeyEvent,
+        UinputAbsSetup,
+    };
+    use gilrs::{EventType, Gilrs, GilrsBuilder};
+
+    /// A name nothing else on the machine has, because GilRs sees every pad
+    /// there is and only these are counted.
+    const NAME: &str = "CEDM Test Pad Off And On";
+
+    fn uinput_is_available() -> bool {
+        std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/uinput")
+            .is_ok()
+    }
+
+    /// A pad that does not exist: two buttons and a stick, because GilRs will
+    /// not read anything with fewer than two axes.
+    fn pad(product: u16) -> VirtualDevice {
+        let mut keys = AttributeSet::<KeyCode>::new();
+        keys.insert(KeyCode::BTN_SOUTH);
+        keys.insert(KeyCode::BTN_EAST);
+        let axis = AbsInfo::new(0, -32768, 32767, 16, 128, 0);
+        VirtualDevice::builder()
+            .expect("uinput")
+            .name(NAME)
+            .input_id(InputId::new(BusType::BUS_USB, 0xf00d, product, 1))
+            .with_keys(&keys)
+            .expect("keys")
+            .with_absolute_axis(&UinputAbsSetup::new(AbsoluteAxisCode::ABS_X, axis))
+            .expect("x")
+            .with_absolute_axis(&UinputAbsSetup::new(AbsoluteAxisCode::ABS_Y, axis))
+            .expect("y")
+            .build()
+            .expect("a test pad can be made")
+    }
+
+    fn ours(gilrs: &Gilrs) -> usize {
+        gilrs
+            .gamepads()
+            .filter(|(_, gamepad)| gamepad.os_name() == NAME)
+            .count()
+    }
+
+    /// Give GilRs its hot-plug events until it counts `want` of the test's
+    /// pads, or two seconds have passed; say what it counted.
+    fn settle(gilrs: &mut Gilrs, want: usize) -> usize {
+        let deadline = Instant::now() + Duration::from_secs(2);
+        while Instant::now() < deadline {
+            while gilrs.next_event().is_some() {}
+            if ours(gilrs) == want {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        ours(gilrs)
+    }
+
+    /// GilRs left unpolled on purpose, so that everything udev says about a
+    /// change arrives at once — the case that went wrong — rather than
+    /// whenever the scheduler happens to space it out.
+    fn quiet() {
+        std::thread::sleep(Duration::from_millis(300));
+    }
+
+    /// Two pads that go together are both seen to go, and both are seen to
+    /// come back and read. The two arrive one at a time first: arriving
+    /// together is the same fault, and would have this skip itself as a
+    /// machine with no gamepad API rather than fail.
+    #[test]
+    fn two_pads_going_together_are_both_seen_to_go() {
+        if !uinput_is_available() {
+            eprintln!("skipped: /dev/uinput cannot be opened here");
+            return;
+        }
+        let mut gilrs = match GilrsBuilder::new().with_force_feedback(false).build() {
+            Ok(gilrs) => gilrs,
+            Err(err) => {
+                eprintln!("skipped: no gamepad API here ({err})");
+                return;
+            }
+        };
+
+        let first = pad(0x0c01);
+        if settle(&mut gilrs, 1) != 1 {
+            eprintln!("skipped: the gamepad API never saw the test pad");
+            return;
+        }
+        let second = pad(0x0c02);
+        if settle(&mut gilrs, 2) != 2 {
+            eprintln!("skipped: the gamepad API never saw the test pads");
+            return;
+        }
+
+        drop(first);
+        drop(second);
+        quiet();
+        assert_eq!(
+            settle(&mut gilrs, 0),
+            0,
+            "both pads that went in the same moment have gone"
+        );
+
+        let _first = pad(0x0c01);
+        let mut second = pad(0x0c02);
+        quiet();
+        assert_eq!(
+            settle(&mut gilrs, 2),
+            2,
+            "both pads that came back are seen"
+        );
+
+        second
+            .emit(&[*KeyEvent::new(KeyCode::BTN_SOUTH, 1)])
+            .expect("the test pad can report a button");
+        let deadline = Instant::now() + Duration::from_secs(2);
+        let mut pressed = false;
+        while !pressed && Instant::now() < deadline {
+            while let Some(event) = gilrs.next_event() {
+                pressed |= matches!(event.event, EventType::ButtonPressed(..))
+                    && gilrs.gamepad(event.id).os_name() == NAME;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        assert!(pressed, "a button on the pad that came back is read");
+    }
+}

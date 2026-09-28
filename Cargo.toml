@@ -1,6 +1,6 @@
 [package]
 name = "cedm"
-version = "0.9.1"
+version = "0.9.2"
 edition = "2021"
 rust-version = "1.89"
 license = "GPL-3.0-only"
@@ -10,7 +10,11 @@ description = "Controller-first graphical greeter for console and desktop sessio
 anyhow = "1"
 bytemuck = { version = "1", features = ["derive"] }
 clap = { version = "4", features = ["derive"] }
-gilrs = "0.11.2"
+# GilRs, as LineXinBar carries it: 0.11.2 built on a gilrs-core whose Linux
+# backend no longer leaves the second of two hot-plug events unread, which left
+# a pad that came back never opened. The same copies the shell and lxb-toolkit
+# read their pads through. See third_party/lxb-gilrs-core/README.LXB.md.
+gilrs = { package = "lxb-gilrs", path = "third_party/lxb-gilrs", version = "0.11.2" }
 glyphon = "0.12"
 libc = "0.2"
 png = "0.18"
@@ -47,6 +51,11 @@ wayland-protocols-wlr = { version = "0.3", features = ["client"] }
 wgpu = "30"
 winit = { version = "0.30", default-features = false, features = ["rwh_06", "wayland", "x11"] }
 zeroize = "1.9"
+
+[dev-dependencies]
+# Only for the controller tests that need a pad to exist: they make one with
+# `uinput`, and skip themselves where /dev/uinput cannot be opened.
+evdev = "0.13"
 
 [profile.release]
 opt-level = 3

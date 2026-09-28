@@ -12,6 +12,8 @@ The following files were copied from LineXinBar (<https://github.com/Petexy/Line
 | `assets/glyphs/*` | matching `icons/*.svg` files |
 | `assets/sounds/*` | matching `crates/lxb-desktop/src/sounds/*.ogg` files, at commit `0290f37` |
 
+`third_party/lxb-gilrs` and `third_party/lxb-gilrs-core` are copies of LineXinBar's own `third_party/` trees of the same names (shell commit `c08e2cf`), byte for byte but their `README.LXB.md`. They are **not** under the terms above: they are GilRs, Apache-2.0 or MIT, with one fix LineXinBar made to its Linux hot-plug handling. The login screen reads its controllers through them so that the whole family reads pads through one GilRs, and the fixed one. See the `README.LXB.md` in each.
+
 The two Noto faces beside them — `assets/fonts/NotoSansDevanagariUI-{Regular,Bold}.ttf` and `assets/fonts/NotoSansCJKsc-{Regular,Bold}.ttf` — are **not** LineXinBar's. They are subsets of Google's Noto Sans Devanagari UI and Noto Sans CJK SC, cut down to what this login screen draws, and they are here because CEDM says things in ten languages and the shell's Roboto has no Devanagari and no Han in it. They keep their own licence, `assets/fonts/LICENSE-NotoSans.txt` (SIL Open Font License 1.1); neither family declares a Reserved Font Name, so the subsets keep their original names. See "What it says, and in which language" in the README.
 
 `lxb-wallpaper-v6` is the compatibility ABI for the shader, palette uniforms, coordinate system, linear-light colour handling and monotonic scene clock. Bump it in both repositories whenever those pixels or semantics change.

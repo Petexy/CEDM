@@ -1,5 +1,5 @@
 Name:           cedm
-Version:        0.9.1
+Version:        0.9.2
 Release:        1%{?dist}
 Summary:        Controller-first graphical display manager for console and desktop sessions
 
@@ -216,7 +216,7 @@ fi
 %systemd_postun %{name}.service
 
 %files
-%license LICENSE assets/fonts/LICENSE.txt assets/fonts/LICENSE-NotoSans.txt
+%license LICENSE assets/fonts/LICENSE.txt assets/fonts/LICENSE-NotoSans.txt third_party/lxb-gilrs/LICENSE-MIT
 %doc README.md contrib/config.toml.example
 %{_docdir}/%{name}/polkit-power.rules.example
 %{_docdir}/%{name}/seamless-login.md
@@ -231,6 +231,13 @@ fi
 %config(noreplace) %{_sysconfdir}/%{name}/greetd.toml
 
 %changelog
+* Sun Sep 27 2026 Piotr Lewandowski <piotr.petexy@gmail.com> - 0.9.2-1
+- Released with LineXinBar 0.9.2. What is new since 0.9.1:
+- The login screen reads its controllers through LineXinBar's copy of GilRs,
+  which no longer leaves the second of two hot-plug events unread, so a pad
+  that is switched off and on again with another is still answered. Its MIT
+  notice is installed with the package.
+
 * Thu Sep 24 2026 Piotr Lewandowski <piotr.petexy@gmail.com> - 0.9.1-1
 - Released with LineXinBar 0.9.1. What is new since 0.9.0:
 - The current carries the shell's sparkles, and an account's Theme > Particles
