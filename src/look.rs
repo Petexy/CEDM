@@ -142,6 +142,16 @@ pub struct Look {
     /// [`Look::particles`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme_particles: Option<bool>,
+    /// Whether the account's shell draws itself the cheap way — Settings >
+    /// System > Low-end hardware mode, `low-end-mode` in `shell.toml` — where
+    /// somebody chose; missing is the automatic answer, which is on where the
+    /// machine draws on its processor.
+    ///
+    /// Carried for the theme's reason and more urgently: the mode is for a
+    /// machine that cannot keep up with the water, and the login screen is the
+    /// first thing such a machine draws. See `Application::low_end`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub low_end_mode: Option<bool>,
     /// What the two above were written under before they were two settings.
     ///
     /// Read where a half has nothing of its own, and published again where it is

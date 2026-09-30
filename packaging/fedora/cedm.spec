@@ -1,5 +1,5 @@
 Name:           cedm
-Version:        0.9.2
+Version:        0.9.3
 Release:        1%{?dist}
 Summary:        Controller-first graphical display manager for console and desktop sessions
 
@@ -231,6 +231,16 @@ fi
 %config(noreplace) %{_sysconfdir}/%{name}/greetd.toml
 
 %changelog
+* Tue Sep 29 2026 Piotr Lewandowski <piotr.petexy@gmail.com> - 0.9.3-1
+- Released with LineXinBar 0.9.3. What is new since 0.9.2:
+- Left alone, the login screen dims, turns the displays off and puts the
+  machine to sleep on the machine's own power settings, which LineXinBar 0.9.3
+  keeps in /etc/lxb/power.toml. The power button does what those say, and the
+  Power menu answer moves to the login screen's own power buttons.
+- Low-end hardware mode follows the last account's choice, and is on by
+  itself when the screen is drawn without a graphics chip: a still wallpaper,
+  the plain materials and frames paced by time.
+
 * Sun Sep 27 2026 Piotr Lewandowski <piotr.petexy@gmail.com> - 0.9.2-1
 - Released with LineXinBar 0.9.2. What is new since 0.9.1:
 - The login screen reads its controllers through LineXinBar's copy of GilRs,

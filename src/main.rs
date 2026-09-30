@@ -43,6 +43,30 @@ fn typed_buffer() -> Zeroizing<String> {
 /// already far finer than anything it can display.
 const CLOCK_INTERVAL: Duration = Duration::from_secs(1);
 
+/// How often whether the machine is on its battery is re-read. The waits it
+/// chooses between are minutes long.
+const BATTERY_INTERVAL: Duration = Duration::from_secs(30);
+
+/// How often a screen that is dark is looked at: the pads are polled and the
+/// power button heard this often, and nothing is drawn.
+const DARK_INTERVAL: Duration = Duration::from_millis(100);
+
+/// The pace of a low-end frame loop while nothing moves. While something does,
+/// it is drawn at the display's own refresh, or at half of it on a device that
+/// cannot keep up — LineXinBar's own low-end pace; see [`cedm::cadence`]. Still
+/// is still here: the wallpaper and the lit control's pulse both run on the
+/// wallpaper's clock, which low-end holds on one moment, so a still screen
+/// changes only with the time it shows.
+const LOW_END_STILL: Duration = Duration::from_secs(1);
+
+/// How long the accounts take to slide along by one, in seconds.
+const CAROUSEL_TRAVEL: f32 = 0.28;
+
+/// The moment of the wallpaper a low-end screen holds still on — LineXinBar's
+/// own, so the session that follows a low-end login screen stands on the same
+/// picture.
+const STILL_WALLPAPER_AT: f32 = 24.0;
+
 /// The bottom row of the column, in the order it is laid out.
 ///
 /// The administrator's policy decides which of the three power actions exist.
@@ -145,6 +169,15 @@ struct Args {
     /// development aid rather than a headless renderer.
     #[arg(long, value_name = "PATH")]
     shot: Option<PathBuf>,
+    /// Read the machine's power settings from this file instead of
+    /// `/etc/lxb/power.toml`.
+    ///
+    /// For trying the waits — dim, dark, sleep — with short ones, inside a
+    /// compositor started by hand. A login screen inside another desktop never
+    /// asks the machine to sleep, whatever the file says; see
+    /// [`Application::rest`].
+    #[arg(long, hide = true, value_name = "PATH")]
+    power_file: Option<PathBuf>,
     /// Open the window at an exact surface size in physical pixels, as
     /// `WIDTHxHEIGHT`. Implies `--windowed`.
     ///
@@ -762,6 +795,29 @@ struct Application {
     /// compositor let it. Held rather than used: the filter lasts exactly as
     /// long as this does. See [`cedm::gamma`].
     _night_light: Option<cedm::gamma::NightLight>,
+    /// The screen left alone: when it dims, goes dark and asks the machine to
+    /// sleep, on the machine's own power settings. See [`cedm::idle`].
+    idle: cedm::idle::Idle,
+    /// How the displays are dimmed and switched off, and the power button
+    /// heard — where the compositor offers it. See [`cedm::display_power`].
+    display_power: Option<cedm::display_power::DisplayPower>,
+    /// Whether the machine runs on its battery, re-read every half minute.
+    on_battery: bool,
+    next_battery_read: Instant,
+    /// Whether this screen draws itself the cheap way — see
+    /// [`Application::low_end`] — and what the last account to sign in chose
+    /// about it, if anything.
+    low_end: bool,
+    low_end_chosen: Option<bool>,
+    /// When anything was last pressed or moved, for the pace a low-end frame
+    /// loop keeps, and when that loop draws next.
+    last_input: Instant,
+    next_frame: Instant,
+    /// The low-end pace while something moves, and whether a redraw was asked
+    /// for as the last frame went out — so the one that arrives is the
+    /// display saying it showed it. See [`cedm::cadence`].
+    cadence: cedm::cadence::Cadence,
+    answer_asked: bool,
     fatal: Option<anyhow::Error>,
 }
 
@@ -841,6 +897,11 @@ impl Application {
         let night_light = (!args.preview)
             .then(|| night_light(&state, &preferences, &users))
             .flatten();
+        let low_end_chosen = low_end_chosen(&state, &preferences, &users);
+        let power_settings = match args.power_file.as_deref() {
+            Some(file) => cedm::idle::Settings::read_own(file),
+            None => cedm::idle::Settings::read(),
+        };
         let now = Instant::now();
         // Continuing whatever is already on screen, where something is: the
         // greeter's own compositor draws this wallpaper before this program
@@ -906,6 +967,16 @@ impl Application {
             next_poll: now,
             session_started: false,
             _night_light: night_light,
+            idle: cedm::idle::Idle::new(power_settings, now),
+            display_power: None,
+            on_battery: cedm::idle::on_battery(),
+            next_battery_read: now + BATTERY_INTERVAL,
+            low_end: false,
+            low_end_chosen,
+            last_input: now,
+            next_frame: now,
+            cadence: cedm::cadence::Cadence::default(),
+            answer_asked: false,
             fatal: None,
         };
         // The board follows whichever account is being looked at, and at
@@ -1087,11 +1158,10 @@ impl Application {
     }
 
     fn carousel_shift(&self, now: Instant) -> f32 {
-        const TRAVEL: f32 = 0.28;
         self.user_motion
             .map(|motion| {
-                let progress =
-                    (now.duration_since(motion.started).as_secs_f32() / TRAVEL).clamp(0.0, 1.0);
+                let progress = (now.duration_since(motion.started).as_secs_f32() / CAROUSEL_TRAVEL)
+                    .clamp(0.0, 1.0);
                 motion.shift * (1.0 - ease(progress))
             })
             .unwrap_or(0.0)
@@ -2162,19 +2232,28 @@ impl Application {
             return;
         }
         if now >= self.next_poll {
-            let actions = self.controller.poll(self.started.elapsed());
+            let mut actions = self.controller.poll(self.started.elapsed());
             // A press on the pad is a hand on the pad, whatever the account
             // being looked at last did. Asked of the poll rather than of each
             // action because it is one fact about one moment — see
             // `Application::hands_on_pad`.
             if !actions.is_empty() {
                 self.hands_on_pad = Some(true);
+                // And somebody at the machine — whose press, on a dark
+                // screen, only lights it.
+                if self.touched(now) {
+                    actions.clear();
+                }
             }
             for action in actions {
                 self.apply_action(action);
             }
             self.next_poll = now + POLL_INTERVAL;
+            if self.idle.screens() == cedm::idle::Screens::Off {
+                self.next_poll = now + DARK_INTERVAL;
+            }
         }
+        self.rest(now);
         if now >= self.next_clock_read {
             self.now = cedm::clock::Now::read();
             self.next_clock_read = now + CLOCK_INTERVAL;
@@ -2188,6 +2267,14 @@ impl Application {
             .is_some_and(|transition| now.duration_since(transition.started).as_secs_f32() >= 0.28)
         {
             self.stage_transition = None;
+        }
+        // And the accounts' slide, once it has arrived: kept past that, it
+        // would go on saying something is moving, which in low-end mode is a
+        // screen drawn at the moving pace for good.
+        if self.user_motion.is_some_and(|motion| {
+            now.duration_since(motion.started).as_secs_f32() >= CAROUSEL_TRAVEL
+        }) {
+            self.user_motion = None;
         }
         // LineXinBar loads the saved accent for an enumerated user
         // immediately. On a passwordless or very fast login, the departure
@@ -2238,12 +2325,148 @@ impl Application {
         {
             self.transition_to(Stage::Error(cedm::i18n::text().attempt_lost.to_string()));
         }
-        if let Some(window) = &self.window {
-            window.request_redraw();
+        // Nothing is drawn on a dark screen: the compositor has faded it out
+        // and switched it off, and a frame there is power spent on nobody. A
+        // low-end screen is drawn once a second while nothing on it moves,
+        // which is what makes it cheap: asking for a frame on every pass would
+        // be answered at the refresh rate whatever the loop waits for. While
+        // something moves it is drawn on the display's beat — each frame as
+        // the last is shown, or every other refresh on a device that cannot
+        // keep up — and the redraw asked for as each frame goes out is what
+        // comes back on that beat. See [`cedm::cadence`].
+        let dark = self.idle.screens() == cedm::idle::Screens::Off;
+        let request_redraw = |window: &Option<Arc<Window>>| {
+            if let Some(window) = window {
+                window.request_redraw();
+            }
+        };
+        if !dark && !self.low_end {
+            request_redraw(&self.window);
+        } else if !dark && (self.moving(now) || self.cadence.moved()) {
+            self.next_frame = now + LOW_END_STILL;
+            match self.cadence.next(now) {
+                cedm::cadence::Next::Now if !self.answer_asked => request_redraw(&self.window),
+                cedm::cadence::Next::At(beat) => self.next_frame = beat,
+                _ => {}
+            }
+        } else if !dark && now >= self.next_frame {
+            request_redraw(&self.window);
+            self.next_frame = now + LOW_END_STILL;
         }
-        event_loop.set_control_flow(ControlFlow::WaitUntil(
-            self.next_poll.min(now + Duration::from_millis(16)),
-        ));
+        let wake = if dark {
+            now + DARK_INTERVAL
+        } else if self.low_end {
+            self.next_frame
+        } else {
+            now + Duration::from_millis(16)
+        };
+        event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_poll.min(wake)));
+    }
+
+    /// Somebody pressed or moved something. Returns whether it should go no
+    /// further, which it should not when all it did was light a dark screen.
+    fn touched(&mut self, now: Instant) -> bool {
+        self.last_input = now;
+        // Whatever it did is drawn now, not at the still screen's pace.
+        self.next_frame = now;
+        let swallowed = self.idle.touched(now);
+        if swallowed {
+            tracing::info!("a press lit the login screen again");
+            self.rest(now);
+        }
+        swallowed
+    }
+
+    /// Carry out the screen being left alone, for this pass: hear the power
+    /// button, dim or darken the displays or bring them back, and ask the
+    /// machine to sleep when it is time. See [`cedm::idle`].
+    fn rest(&mut self, now: Instant) {
+        let presses = self
+            .display_power
+            .as_mut()
+            .map(|power| power.pump())
+            .unwrap_or_default();
+        for down in presses {
+            if down {
+                self.power_button(now);
+            }
+        }
+        if now >= self.next_battery_read {
+            self.on_battery = cedm::idle::on_battery();
+            self.next_battery_read = now + BATTERY_INTERVAL;
+        }
+        let doing = self.idle.pass(now, self.on_battery);
+        if let Some(screens) = doing.screens {
+            tracing::info!(?screens, "the login screen's displays");
+            if let Some(power) = &mut self.display_power {
+                power.set(screens);
+            }
+            if let Some(window) = &self.window {
+                window.request_redraw();
+            }
+        }
+        // Never from a preview or from inside another desktop, which share
+        // somebody's machine rather than being its login screen, and never
+        // while a session is being started.
+        if doing.sleep && !matches!(self.stage, Stage::Departing { .. }) {
+            if self.args.preview || self.args.windowed || !owns_the_machine() {
+                tracing::info!(
+                    "the login screen would ask the machine to sleep now, but it is not \
+                     the machine's own login screen"
+                );
+            } else {
+                tracing::info!(
+                    "nobody has used the login screen for a while; asking the machine to sleep"
+                );
+                if let Err(message) = cedm::power::request(cedm::power::Action::Sleep) {
+                    tracing::info!(message, "the machine did not go to sleep");
+                }
+            }
+        }
+    }
+
+    /// The power button, heard from the compositor. The login manager answers
+    /// it as the machine is set to; the one answer it has no word for, the
+    /// Power menu, this screen gives itself by moving to its own power
+    /// buttons. A press on a dark screen lights it whatever it is set to do.
+    fn power_button(&mut self, now: Instant) {
+        if self.touched(now) {
+            return;
+        }
+        if self.idle.settings().button != cedm::idle::Button::Menu {
+            return;
+        }
+        if matches!(self.stage, Stage::Departing { .. }) {
+            return;
+        }
+        if let Some(index) = self
+            .footer
+            .iter()
+            .position(|item| matches!(item, FooterItem::Power(_)))
+        {
+            tracing::info!("the power button: to the login screen's own power buttons");
+            self.focus = Focus::Footer(index);
+            self.sync_desired_column();
+        }
+    }
+
+    /// Whether anything on screen is moving, for the pace a low-end frame loop
+    /// keeps: somebody has just done something, or a screen, a menu, the board
+    /// or the carousel is part-way through a change.
+    fn moving(&self, now: Instant) -> bool {
+        let recently = |at: Option<Instant>| {
+            at.is_some_and(|at| now.saturating_duration_since(at) < Duration::from_millis(600))
+        };
+        now.saturating_duration_since(self.last_input) < Duration::from_secs(1)
+            || self.stage_transition.is_some()
+            || self.user_motion.is_some()
+            || recently(self.keyboard_opened)
+            || self.keyboard_closing.is_some()
+            || recently(self.menu_opened)
+            || self.menu_closing.is_some()
+            || recently(self.first_frame)
+            || matches!(self.stage, Stage::Departing { .. } | Stage::Busy(_))
+            || !visual::theme::settled_to(&self.accent)
     }
 
     /// Work out which displays the surface covers, and where each one is on it.
@@ -2320,7 +2543,8 @@ impl Application {
         ease(now.duration_since(began).as_secs_f32() / cedm::ui::ARRIVAL)
     }
 
-    fn render(&mut self) -> anyhow::Result<()> {
+    /// Draw a frame, and say whether it went to the display.
+    fn render(&mut self) -> anyhow::Result<bool> {
         let now = Instant::now();
         // Advanced first, because it can retire itself: a menu that has
         // finished leaving stops existing before anything reads the stage it
@@ -2332,7 +2556,13 @@ impl Application {
             progress,
             interactive: menu_live && !leaving,
         });
-        let wallpaper_time = self.wallpaper_clock.elapsed().as_secs_f32();
+        // Held on one moment in low-end mode, as LineXinBar holds its own: the
+        // wallpaper is most of what a frame costs.
+        let wallpaper_time = if self.low_end {
+            STILL_WALLPAPER_AT
+        } else {
+            self.wallpaper_clock.elapsed().as_secs_f32()
+        };
         let risen = self.arrival(now);
         let arrival = self.keyboard_arrival(now);
         // A frame drawn on no display at all is a black screen with a working
@@ -2408,7 +2638,17 @@ impl Application {
         );
         self.hits = output.hits;
         let renderer = self.renderer.as_mut().context("renderer not ready")?;
-        renderer.render(&output.scene, wallpaper_time)
+        // A low-end frame asks to be told when it has been shown, which is the
+        // beat the next one is drawn on. See [`cedm::cadence`].
+        let window = self.window.as_ref().filter(|_| self.low_end);
+        let mut presented = false;
+        renderer.render(&output.scene, wallpaper_time, || {
+            presented = true;
+            if let Some(window) = window {
+                window.pre_present_notify();
+            }
+        })?;
+        Ok(presented)
     }
 
     /// Write the frame that was just drawn out as a PNG.
@@ -2457,9 +2697,26 @@ impl ApplicationHandler for Application {
                 let faces = self.load_faces();
                 match pollster::block_on(Renderer::new(window.clone(), &faces)) {
                     Ok(renderer) => {
+                        // Low-end where the last account to sign in chose it,
+                        // and otherwise where this screen is drawn on the
+                        // processor — the answer LineXinBar gives by itself.
+                        self.low_end = self.low_end_chosen.unwrap_or_else(|| renderer.software());
+                        cedm::visual::theme::set_low_end(self.low_end);
+                        if self.low_end {
+                            tracing::info!(
+                                chosen = ?self.low_end_chosen,
+                                "the login screen draws itself the cheap way"
+                            );
+                        }
                         self.renderer = Some(renderer);
                         self.window = Some(window);
                         self.refresh_displays();
+                        // Only the compositor this screen is the shell of
+                        // offers it, so a preview on somebody's desktop finds
+                        // nothing to bind and changes none of their displays.
+                        if self.args.shot.is_none() {
+                            self.display_power = cedm::display_power::DisplayPower::connect();
+                        }
                     }
                     Err(error) => {
                         self.fatal = Some(error);
@@ -2499,10 +2756,44 @@ impl ApplicationHandler for Application {
                 self.refresh_displays();
             }
             WindowEvent::RedrawRequested => {
-                if let Err(error) = self.render() {
-                    self.fatal = Some(error);
-                    event_loop.exit();
-                    return;
+                let now = Instant::now();
+                // A low-end redraw asked for as a frame went out arrives when
+                // the display has shown it; a device drawing at half the
+                // refresh then waits for the beat after. See `tick`.
+                if self.low_end {
+                    if std::mem::take(&mut self.answer_asked) {
+                        self.cadence.answered(now);
+                    }
+                    if self.moving(now) || self.cadence.moved() {
+                        if let cedm::cadence::Next::At(beat) = self.cadence.next(now) {
+                            self.next_frame = beat;
+                            return;
+                        }
+                    }
+                }
+                let presented = match self.render() {
+                    Ok(presented) => presented,
+                    Err(error) => {
+                        self.fatal = Some(error);
+                        event_loop.exit();
+                        return;
+                    }
+                };
+                if presented && self.low_end {
+                    let moving = self.moving(now);
+                    self.cadence.drew(now, moving);
+                    if let Some(window) = &self.window {
+                        self.cadence.set_refresh(
+                            window
+                                .current_monitor()
+                                .and_then(|monitor| monitor.refresh_rate_millihertz())
+                                .unwrap_or(0),
+                        );
+                        if moving {
+                            window.request_redraw();
+                            self.answer_asked = true;
+                        }
+                    }
                 }
                 // After a frame rather than instead of one: the capture reads
                 // back what `render` composed, so there has to have been one.
@@ -2514,6 +2805,12 @@ impl ApplicationHandler for Application {
                 }
             }
             WindowEvent::CursorMoved { position, .. } => {
+                // A pointer moved on a dark screen lights it and does nothing
+                // else; a pointer that has not moved is not a person.
+                if position != self.pointer && self.touched(Instant::now()) {
+                    self.pointer = position;
+                    return;
+                }
                 self.pointer = position;
                 if let Some(target) =
                     cedm::ui::target_at(&self.hits, self.pointer.x as f32, self.pointer.y as f32)
@@ -2526,6 +2823,9 @@ impl ApplicationHandler for Application {
                 button: MouseButton::Left,
                 ..
             } => {
+                if self.touched(Instant::now()) {
+                    return;
+                }
                 if let Some(target) =
                     cedm::ui::target_at(&self.hits, self.pointer.x as f32, self.pointer.y as f32)
                 {
@@ -2534,6 +2834,10 @@ impl ApplicationHandler for Application {
             }
             WindowEvent::ModifiersChanged(modifiers) => self.modifiers = modifiers.state(),
             WindowEvent::KeyboardInput { event, .. } if event.state == ElementState::Pressed => {
+                // The key that lights a dark screen does only that.
+                if self.touched(Instant::now()) {
+                    return;
+                }
                 // And a key is a hand on a keyboard. The board's own keys never
                 // arrive here — they are pressed with whatever is driving the
                 // column and reach `act_on_key` instead — so this is a real
@@ -2894,6 +3198,27 @@ fn sound_output(state: &State, preferences: &Preferences, users: &[User]) -> ced
     }
 }
 
+/// Whether this login screen is the machine's own, on its displays, rather
+/// than one running inside somebody's desktop. LineXinBar's compositor says
+/// which backend it is drawing through; on hardware it says `drm`. A
+/// compositor that says nothing is taken at its word as the machine's.
+fn owns_the_machine() -> bool {
+    std::env::var("LXB_SESSION_BACKEND").map_or(true, |backend| backend == "drm")
+}
+
+/// Whether the last account to sign in chose low-end hardware mode —
+/// LineXinBar's Settings > System > Low-end hardware mode, published with the
+/// rest of its look. `None` where it chose nothing, which is the automatic
+/// answer. The same account every other fact about the room comes from.
+fn low_end_chosen(state: &State, preferences: &Preferences, users: &[User]) -> Option<bool> {
+    let last = preferences
+        .last_user
+        .as_deref()
+        .or(state.last_user.as_deref())?;
+    let user = users.iter().find(|user| user.name == last)?;
+    cedm::look::published(&user.name, user.uid)?.low_end_mode
+}
+
 fn night_light(
     state: &State,
     preferences: &Preferences,
@@ -3180,6 +3505,7 @@ mod tests {
                 preview_menu: false,
                 demo: false,
                 shot: None,
+                power_file: None,
                 size: None,
                 displays: Vec::new(),
                 language: None,

@@ -1,0 +1,2813 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<protocol name="lxb_shell_v1">
+  <copyright>
+    Copyright © 2026 The LineXinBar authors
+
+    Permission is hereby granted, free of charge, to any person obtaining a
+    copy of this software and associated documentation files (the "Software"),
+    to deal in the Software without restriction, including without limitation
+    the rights to use, copy, modify, merge, publish, distribute, sublicense,
+    and/or sell copies of the Software, and to permit persons to whom the
+    Software is furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+  </copyright>
+
+  <interface name="lxb_shell_v1" version="45">
+    <description summary="private channel between LineXinBar and its session shell">
+      Layer-shell lets a shell draw itself, but says nothing about the two
+      things a console-style session needs: a hardware button that reaches the
+      shell even while a fullscreen application owns the keyboard, and a way
+      for the shell to end that application or the session.
+
+      This interface supplies exactly those. It is a privileged protocol: the
+      compositor offers it only to the programs its own session is made of —
+      the session shell it started, and the desktop portal that draws its
+      questions through the shell — and refuses it to every other client.
+
+      That is deliberately narrower than wlr-layer-shell's footing, which this
+      interface used to claim. A LineXinBar session runs a great deal that the
+      user did not write and the compositor cannot vet: Valve's client and every
+      game it starts, whatever the software hub installed, a browser. The
+      requests here hide any application from the screen while leaving it
+      running, close anybody's window, inject key and pointer events, and end
+      the session — none of which is a thing an ordinary client of a session
+      should be able to do to the rest of it.
+
+      The compositor decides from the credentials the kernel puts on the
+      connection, never from anything a client says about itself. A client that
+      may not bind it is not shown the global at all, and an attempt to bind it
+      regardless is a protocol error.
+
+      The two programs it does offer it to do not get the same interface. The
+      session shell may use all of it. The desktop portal — which exists to put
+      questions from applications outside the session to the user — may use
+      offer_kind, ask_to_pick_files and ask_to_share, and receives the answers
+      to those; every other request is a not_permitted error on its object.
+    </description>
+
+    <enum name="error">
+      <description summary="what a client got wrong">
+        Sent as a fatal protocol error on the object it happened to.
+      </description>
+      <entry name="not_permitted" value="0"
+             summary="this request is not one this client may make"/>
+    </enum>
+
+    <request name="destroy" type="destructor">
+      <description summary="stop receiving session events">
+        Releases the object. Any other bound instance keeps receiving events.
+      </description>
+    </request>
+
+    <request name="close_foreground">
+      <description summary="ask the foreground application to close">
+        Requests that the compositor close the topmost application window, the
+        one named by the most recent foreground event.
+
+        The request is polite: the application is asked to close and may
+        refuse or prompt the user, exactly as if its own close button had been
+        used. It is silently ignored when no application window exists.
+
+        Superseded by close_output_foreground for shells that draw on more
+        than one display.
+      </description>
+    </request>
+
+    <request name="close_output_foreground" since="3">
+      <description summary="ask the application on one display to close">
+        As close_foreground, but scoped to a display: the topmost application
+        window on that display is asked to close.
+
+        A shell whose overlay belongs to one display has to be able to say so.
+        Otherwise the entry it drew as "Close Celeste" closes whatever happens
+        to be topmost across the session instead.
+
+        Silently ignored when that display has no application window, or when
+        the output is gone.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display to act on"/>
+    </request>
+
+    <request name="quit">
+      <description summary="end the session">
+        Shuts the compositor down. On a native session this logs the user out.
+      </description>
+    </request>
+
+    <request name="set_launch_output" since="2">
+      <description summary="choose the display new applications open on">
+        Names the display the user is currently driving, so that an application
+        started by the shell opens there.
+
+        Without this the compositor can only infer the answer from keyboard
+        focus, which is wrong in exactly the case that matters: a shell drawn
+        over a running application gives focus back to that application before
+        the newly started one maps, so the new window would join the old one's
+        display instead of the one it was picked on. A shell showing one
+        surface per display already knows which display that is.
+
+        The choice persists until it is changed. It is a preference, not a
+        constraint: the compositor still places windows itself, and falls back
+        to its own policy when the named output is gone.
+      </description>
+      <arg name="output" type="object" interface="wl_output"
+           summary="display to open applications on"/>
+    </request>
+
+    <request name="set_driven_output" since="41">
+      <description summary="which display the user is at">
+        Names the display the user is driving, for every question that is about
+        where the person is rather than about where a window belongs: which
+        display's topmost window gets the keyboard back when something closes,
+        which display's game is the X screen's active window, and which display
+        a screenshot binding photographs.
+
+        It is not set_launch_output, and the two came apart because they had
+        been one field answering both. A shell holds the launch answer on the
+        display a game was started from for as long as that game is on its way,
+        which is right — an application belongs to the screen it was launched
+        from, however far the user wanders while it loads. Read as "where the
+        user is", that same held value walks the keyboard and _NET_ACTIVE_WINDOW
+        off to a screen nobody is looking at, for as long as a game takes to
+        open. So the shell says both, and says them separately.
+
+        The choice persists until it is changed, and it is a preference rather
+        than a constraint: the compositor falls back to its own reading — the
+        display holding keyboard focus, then the one under the pointer — when
+        the named output is gone or was never named.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display being driven"/>
+    </request>
+
+    <request name="place_launch" since="41">
+      <description summary="where one launch's window belongs">
+        Files one launch under the display it was started from, so that the
+        window it turns into opens there whatever else has been started since.
+
+        set_launch_output is one value for the session, and a session can be
+        loading two things on two displays at once. Whichever launch that one
+        value happens to name is where *every* window that maps goes — so two
+        games started on two screens, whose windows arrive in the other order,
+        open on each other's displays. This is the same answer per launch: the
+        compositor keeps a record for each and places a window it can match
+        against the record's own output, and falls back to set_launch_output
+        for a window it cannot match.
+
+        The record is matched two ways, and either is enough. pid is the
+        process the shell started, and a window is that launch's if the process
+        behind it is that pid or anything descended from it — a wrapper script,
+        a launcher, a game re-executed under a runtime. app_id is what the
+        window will call itself where the shell knows it and there is no
+        process to name: a game handed to a store client is started by the
+        client rather than by the shell, and arrives under a class the shell
+        can predict. Pass 0 for pid or an empty app_id where the shell has
+        neither, which files a record that only its output is read from.
+
+        launch is the shell's own number for this press. It means nothing to
+        the compositor beyond telling one record from another, and a number
+        used again replaces the record it named. A record is dropped by
+        forget_launch, by the display it names going away, and when nothing has
+        matched it for long enough that no window is coming.
+      </description>
+      <arg name="launch" type="uint" summary="the shell's own number for this press"/>
+      <arg name="output" type="object" interface="wl_output" summary="the display it was started from"/>
+      <arg name="pid" type="uint" summary="the process started, or 0 for none"/>
+      <arg name="app_id" type="string" summary="what its window will call itself, or empty"/>
+    </request>
+
+    <request name="forget_launch" since="41">
+      <description summary="that launch is over">
+        Drops the record place_launch filed. Sent when the loading screen for
+        it ends, however it ended: the window arrived, the process died, the
+        wait ran out, the display was unplugged. Naming a launch that was never
+        filed, or one already dropped, does nothing.
+      </description>
+      <arg name="launch" type="uint" summary="the number place_launch was given"/>
+    </request>
+
+    <request name="set_output_overview" since="4">
+      <description summary="enter or leave the window overview on one display">
+        While the overview is on, the compositor stops drawing that display's
+        windows at their real geometry and instead animates each one into a
+        card slot, laid out by the algorithm both sides share (the shell and
+        the compositor are built from the same crate, so the slots the shell
+        decorates are exactly the slots the compositor fills).
+
+        The shell draws everything else of the overview — the menu beside the
+        cards, the selection frame and the titles — on its own layer surface,
+        transparent where the cards show through. Leaving the overview
+        animates every window back to where it was.
+
+        Enabling it on a second display implicitly leaves it on the first:
+        the overview belongs to the display the user is driving.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display to change"/>
+      <arg name="enabled" type="uint" summary="1 to enter the overview, 0 to leave it"/>
+    </request>
+
+    <request name="set_overview_selection" since="4">
+      <description summary="which overview card the shell has selected">
+        Tells the compositor which card the user is on, counted over the
+        shell's full card list — every window plus the trailing start-screen
+        card. The row scrolls to keep that card visible, and the scroll
+        position is derived from this index by the shared layout, so saying
+        the selection is what keeps the two processes scrolling as one.
+
+        Meaningful only while the overview is on; harmless otherwise.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display"/>
+      <arg name="index" type="uint" summary="selected card, 0-based"/>
+    </request>
+
+    <request name="activate_window" since="4">
+      <description summary="bring one window to the front and focus it">
+        Raises and focuses the window named by an output_window event. The
+        shell sends this when a card is chosen in the overview; it is how the
+        overview doubles as a window switcher.
+
+        Silently ignored when the window is gone — it may have closed between
+        the event and the choice.
+      </description>
+      <arg name="id" type="uint" summary="the window, from output_window"/>
+    </request>
+
+    <request name="activate_window_from" since="14">
+      <description summary="bring a window back, growing out of where it was asked for">
+        As activate_window, and in addition flies the window in from the given
+        rectangle — in the display's logical pixels — over the same flight the
+        overview's cards use.
+
+        This is what a tile press does when the application it names is
+        already running. What the user asked for is not a copy of the
+        application but the one they left, and what they should see is that
+        one arriving: the window itself growing out of the tile, the way an
+        application already in memory opens on a phone. A splash panel with an
+        icon and a spinner would say the opposite — that something is being
+        loaded — and it would be a lie in the one case where the application
+        is demonstrably already there.
+
+        Only the compositor can do this, because only the compositor has the
+        window's pixels. It draws the flight above everything else on that
+        display, the shell's own surface included, so the start screen the
+        window grows out of stays behind it for the whole of the flight
+        instead of being taken away first.
+
+        The rectangle is a starting point, not a crop: the window keeps its
+        aspect ratio and is fitted inside, exactly as a card is. Sending a
+        rectangle that is empty, or naming a window that is gone, is the same
+        as activate_window on its own.
+      </description>
+      <arg name="id" type="uint" summary="the window, from output_window"/>
+      <arg name="x" type="int" summary="left edge of the rectangle to grow from"/>
+      <arg name="y" type="int" summary="top edge of the rectangle to grow from"/>
+      <arg name="width" type="uint" summary="width of that rectangle"/>
+      <arg name="height" type="uint" summary="height of that rectangle"/>
+    </request>
+
+    <request name="kill_window" since="5">
+      <description summary="end one window's application outright">
+        Ends the application behind the window named by an output_window
+        event.
+
+        Unlike close_foreground this is not a request the client can refuse,
+        prompt about or ignore: the shell's overlay is the console's way out
+        of an application that is not answering, and an application that puts
+        up a "save your work?" dialog behind an overlay the user has just
+        dismissed is indistinguishable from one that has hung.
+
+        What it ends is the application, not the window's process — those are
+        not always the same thing, and a supervised helper killed on its own
+        is simply rebuilt, window and all, by whatever was supervising it. The
+        compositor resolves the application from the window's client
+        credentials, which for an X11 window means the window's own pid rather
+        than Xwayland's, and reaches the rest of it through the process tree.
+        An application whose lifetime belongs to a session or container
+        outside that tree is ended the way that session ends.
+
+        The application is asked before it is ended, and ended shortly after
+        whether or not it answered. Nothing about that is negotiable from the
+        client side; the pause exists so that an application which does answer
+        can finish writing, not so that it can decline.
+
+        Silently ignored when the window is gone. An application that cannot
+        be identified at all — one forwarded from another machine, which is
+        not this session's to end — is asked to close instead.
+      </description>
+      <arg name="id" type="uint" summary="the window, from output_window"/>
+    </request>
+
+    <request name="move_window_to_output" since="15">
+      <description summary="move one window to another display">
+        Moves the window named by an output_window event to a different
+        display, and makes it that display's window: it is re-tiled across the
+        new screen, raised there, and belongs to it from then on — an
+        application pinned to the display it opened on is pinned to this one
+        instead.
+
+        Only the compositor can do it. The shell knows which displays exist and
+        which window the user picked, but a window's place in the layout is the
+        compositor's, and a client cannot be asked to move itself: it does not
+        know where the other display is, and under this layout it does not
+        choose its own geometry in the first place.
+
+        Keyboard focus is deliberately left alone. This is sent from an overlay
+        that is holding the keyboard on the display the user is standing on,
+        and a move is not a request to go and look at the other screen.
+
+        Silently ignored when the window is gone, when the output is gone, and
+        when the window is already on that display.
+      </description>
+      <arg name="id" type="uint" summary="the window, from output_window"/>
+      <arg name="output" type="object" interface="wl_output" summary="the display to move it to"/>
+    </request>
+
+    <request name="capture_window" since="15">
+      <description summary="write one window's pixels to a PNG file">
+        Captures the window named by an output_window event — its own contents
+        at its own size, with nothing in front of it and no wallpaper behind —
+        and writes it to `path` as a PNG.
+
+        Only the compositor has those pixels. A client cannot photograph
+        another client's window, and the shell cannot photograph the window it
+        is drawn over even when that window is on screen: what it holds is a
+        layer surface of its own.
+
+        The path is the shell's to choose, and is passed rather than worked out
+        here, because where a user's pictures go is a question about the user's
+        session and not about the display server. It must be absolute, and its
+        directory must already exist — the compositor creates neither. Nothing
+        is written anywhere else: a relative path, or one that cannot be
+        written, is refused.
+
+        The answer comes back as window_captured, always: a shell that has told
+        the user it took a screenshot has to be able to tell them where it went,
+        or that it did not happen.
+      </description>
+      <arg name="id" type="uint" summary="the window, from output_window"/>
+      <arg name="path" type="string" summary="absolute path of the PNG file to write"/>
+    </request>
+
+    <request name="move_pointer" since="7">
+      <description summary="move the pointer, as a mouse would">
+        Moves the seat's pointer by a relative amount, in logical pixels, and
+        delivers the motion to whatever is under it — including the relative
+        stream a game with a locked pointer reads its camera from.
+
+        A console has a controller and no mouse, and an application that wants
+        a pointer cannot be given one by the shell: wl_pointer belongs to the
+        seat, and only the compositor may speak for the seat. Neither can the
+        shell simply move a cursor of its own, because the point is to reach
+        the *application* — a stick that moved a drawing on the shell's own
+        surface would click on nothing.
+
+        The shell reads the controller straight from /dev/input, which is what
+        lets it drive this while a fullscreen application holds the keyboard,
+        and turns it on per application: a game already using the right stick
+        for its camera must not have it taken away by a shell that thinks the
+        stick is a mouse.
+
+        Deltas accumulate; sending one every controller poll is the intended
+        shape. It is ignored while no application window exists, so a shell
+        that leaves the stick on cannot walk the pointer across an empty
+        desktop.
+
+        The pointer stays inside that application. A mouse belongs to the
+        session and may be pushed onto any display in it; this stick was turned
+        on for one window, and there is nothing outside that window it was
+        aimed at — least of all a second screen, where the user cannot see the
+        cursor arrive. So movement is held inside the window the compositor is
+        delivering it to: the topmost application on the display the shell says
+        it is being driven on, which is the same window set_driven_output and
+        output_app_id already agree about.
+
+        And a pointer left outside it is fetched back. A session has a mouse as
+        well, and a mouse may leave the cursor anywhere; the first movement
+        after that puts it at the nearest point of the window, so that the
+        stick always means something. That fetch is delivered as motion but
+        withheld from the relative stream — it is a pointer being retrieved,
+        not a hand moving a mouse.
+      </description>
+      <arg name="dx" type="fixed" summary="horizontal movement, logical pixels"/>
+      <arg name="dy" type="fixed" summary="vertical movement, logical pixels"/>
+    </request>
+
+    <request name="pointer_button" since="7">
+      <description summary="press or release a pointer button">
+        Presses or releases one of the seat's pointer buttons where the pointer
+        currently is, exactly as a mouse button does — including raising and
+        focusing what it lands on. Where it is: this does not fetch the pointer
+        back the way move_pointer does, because the cursor the user is looking
+        at is what a click has to answer to.
+
+        A pointer that cannot click is a cursor drawing, so this comes with
+        move_pointer rather than after it. The button is a Linux input code
+        (BTN_LEFT is 0x110), which is what wl_pointer itself carries.
+
+        Ignored while no application window exists, for the same reason
+        move_pointer is.
+      </description>
+      <arg name="button" type="uint" summary="Linux button code, as wl_pointer reports it"/>
+      <arg name="state" type="uint" enum="button_state" summary="pressed or released"/>
+    </request>
+
+    <request name="scroll_pointer" since="7">
+      <description summary="scroll where the pointer is">
+        Scrolls whatever is under the pointer, as a wheel or a touchpad does,
+        by an amount in logical pixels. Positive is the direction a wheel
+        turned away from the user scrolls in: down, and right.
+
+        A pointer that can only be moved and clicked leaves half of what a
+        mouse does out, and the half that a page of settings, a browser or a
+        file list needs most. The shell sends this from the stick and the
+        D-pad the pointer is *not* being aimed with, which are the controls it
+        has already stopped using for its own navigation while an application
+        is in front.
+
+        It is continuous rather than a count of wheel notches, because a stick
+        is: it is pushed further to scroll faster, exactly as a touchpad is
+        dragged further. The compositor describes it to clients as the
+        continuous axis source it is.
+
+        Ignored while no application window exists, for the same reason
+        move_pointer is.
+      </description>
+      <arg name="dx" type="fixed" summary="horizontal scroll, logical pixels"/>
+      <arg name="dy" type="fixed" summary="vertical scroll, logical pixels"/>
+    </request>
+
+    <enum name="button_state" since="7">
+      <description summary="whether a pointer button is down">
+        The same two values wl_pointer uses, so a shell forwarding a button it
+        received does not have to translate one enumeration into another.
+      </description>
+      <entry name="released" value="0" summary="the button is not pressed"/>
+      <entry name="pressed" value="1" summary="the button is pressed"/>
+    </enum>
+
+    <request name="keyboard_key" since="8">
+      <description summary="press or release a key on the seat's keyboard">
+        Presses or releases a key on the seat's keyboard, delivered to whatever
+        holds keyboard focus exactly as a key on a real keyboard would be —
+        through the compositor's own keymap, so the client sees the keysym its
+        layout gives that key.
+
+        This is not a way to type. A shell with an on-screen keyboard already
+        has zwp_virtual_keyboard_v1 or zwp_input_method_v2 for that, and either
+        is the right thing for text. It is here for the keys that are *not*
+        text: the arrows, which are how a list, a menu or a document is moved
+        through, and which a console shell has a D-pad for and nothing else to
+        do with while the pointer is being aimed with the other stick.
+
+        The key is a Linux input code (KEY_LEFT is 105), for the same reason
+        pointer_button carries one: it is what the seat's keyboard is fed from,
+        and translating a keysym back into a keycode means guessing at the
+        layout the compositor is holding.
+
+        Held keys repeat in the client, from the repeat rate the seat already
+        advertises, so a direction is a press when it goes down and a release
+        when it comes up rather than a press for every repeat. A shell that
+        stops sending must release what it has pressed; the compositor releases
+        anything left held if the shell disconnects, but nothing else can know
+        the difference between a held key and a shell that stopped talking.
+
+        Ignored while no application window exists, for the same reason
+        move_pointer is.
+      </description>
+      <arg name="key" type="uint" summary="Linux key code, as wl_keyboard reports it"/>
+      <arg name="state" type="uint" enum="key_state" summary="pressed or released"/>
+    </request>
+
+    <enum name="key_state" since="8">
+      <description summary="whether a key is down">
+        The same two values wl_keyboard uses.
+      </description>
+      <entry name="released" value="0" summary="the key is not pressed"/>
+      <entry name="pressed" value="1" summary="the key is pressed"/>
+    </enum>
+
+    <request name="set_output_hdr" since="9">
+      <description summary="drive one display in HDR, and say how">
+        Puts a display into high dynamic range — the connector is told the
+        signal is BT.2020 with the ST 2084 (PQ) transfer function, and the
+        compositor's own output is re-encoded to match — or takes it back out
+        of it.
+
+        Everything about this belongs to the compositor rather than to the
+        shell. The colour pipeline that does the re-encoding is the CRTC's,
+        the metadata that tells the display what it is being sent is an
+        infoframe only a modesetting client may attach, and both have to
+        survive the shell being restarted. What the shell owns is the
+        *decision*, which is why this is a request and not a client-side
+        setting: it is a page in the Settings column, and the compositor is
+        what carries it out.
+
+        The four values are sent together because they are one pipeline and
+        are applied as one commit. A shell that only wants to change the
+        brightness still sends all four, which is also what makes this
+        idempotent — an unchanged set is recognised and costs nothing.
+
+        sdr_brightness is the luminance the display is asked to give plain
+        white. Everything on screen is SDR content, so this is the single
+        control that decides whether the session comes out dim or blinding;
+        100 cd/m² is the reference the sRGB standard names and roughly what an
+        SDR display in a lit room does.
+
+        srgb_intensity says how far sRGB's colours are stretched on their way
+        into BT.2020's much wider gamut. At 0 the conversion is exact and the
+        session looks the way it did in SDR. At 100 the numbers are passed
+        through untouched, so sRGB's red is displayed as BT.2020's red and
+        everything comes out far more saturated — the "vivid" setting a
+        television ships in. In between is a blend of the two.
+
+        peak_brightness is the luminance declared to the display as the
+        brightest the content will reach. 0 means "whatever the display says
+        it can do", read from its EDID, which is the right answer unless the
+        user knows their display overstates it.
+
+        Ignored, with the settings remembered, when the output cannot be
+        driven in HDR: see the output_hdr event, which is how a shell knows
+        whether to offer this at all. Silently ignored when the output is
+        gone.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display to configure"/>
+      <arg name="enabled" type="uint" summary="1 to drive the display in HDR, 0 for SDR"/>
+      <arg name="sdr_brightness" type="uint" summary="reference white for SDR content, cd/m²"/>
+      <arg name="srgb_intensity" type="uint"
+           summary="how far sRGB colour is stretched towards BT.2020, 0 to 100"/>
+      <arg name="peak_brightness" type="uint"
+           summary="peak luminance to declare, cd/m²; 0 for the display's own"/>
+    </request>
+
+    <request name="set_output_mode" since="11">
+      <description summary="drive one display at a different resolution">
+        Asks the compositor to change a display's mode: the resolution it is
+        scanned out at, and the rate it is refreshed at.
+
+        A mode is a modesetting client's to choose for the same reason HDR is.
+        The connector's mode list comes off the hardware, the change is an
+        atomic commit on a CRTC nobody else may touch, and everything on that
+        display — every window, every layer surface, the shell's own bar —
+        has to be reconfigured to the new size afterwards. What the shell owns
+        is the decision.
+
+        width and height are the mode's own pixel dimensions, before any
+        scale or transform the output carries: they are what the connector
+        lists, and what an output_mode event reported.
+
+        refresh is in mHz, as the mode list gives it, so a 59.94 Hz mode is
+        59940. 0 asks for the fastest mode of that size, which is what a shell
+        that only cares about the resolution should send. Anything else is
+        matched to the nearest refresh the display offers at that size, so a
+        rate that is no longer in the list — the display was swapped for
+        another behind the same connector — still lands on something rather
+        than being dropped.
+
+        Ignored when nothing of that size exists, when the display is gone,
+        and on a backend with no connectors to set a mode on: a nested session
+        is the size of its window. In all three the display keeps the mode it
+        has, and the output_mode events say so — a shell should mark what those
+        report rather than what it asked for.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display to change"/>
+      <arg name="width" type="uint" summary="mode width in pixels"/>
+      <arg name="height" type="uint" summary="mode height in pixels"/>
+      <arg name="refresh" type="uint" summary="refresh in mHz; 0 for the fastest of that size"/>
+    </request>
+
+    <enum name="transform" since="16">
+      <description summary="how a display's picture is turned">
+        The same eight values as wl_output.transform, with the same numbers and
+        the same meanings, so a shell that reads one does not have to translate
+        it into the other.
+
+        Four of them are rotations and four are the same rotations with the
+        picture flipped about a vertical axis first. A display standing on its
+        side wants a rotation; the flipped values are for a picture reaching
+        the eye through a mirror, and a shell has no reason to offer them
+        unless it knows there is one.
+      </description>
+      <entry name="normal" value="0" summary="no rotation"/>
+      <entry name="90" value="1" summary="a quarter turn"/>
+      <entry name="180" value="2" summary="upside down"/>
+      <entry name="270" value="3" summary="a quarter turn the other way"/>
+      <entry name="flipped" value="4" summary="mirrored"/>
+      <entry name="flipped_90" value="5" summary="mirrored, then a quarter turn"/>
+      <entry name="flipped_180" value="6" summary="mirrored, then upside down"/>
+      <entry name="flipped_270" value="7" summary="mirrored, then a quarter turn the other way"/>
+    </enum>
+
+    <request name="set_output_transform" since="16">
+      <description summary="turn one display's picture">
+        Asks the compositor to draw a display's picture turned: a screen
+        standing on its side is given a quarter turn so that what it shows
+        stands up with it.
+
+        It belongs to the compositor for the plainest of the reasons a mode
+        does: everything on that display is laid out in the space the turn
+        creates. A quarter turn swaps the display's logical width and height,
+        which moves the outputs laid out beside it, re-arranges every layer
+        surface anchored to it — the shell's own bar included — and re-tiles
+        every window on it. A client can no more do that than it can choose
+        its own geometry under this layout.
+
+        Unlike a mode this is the compositor's own rendering rather than the
+        connector's: the picture is composited turned and scanned out at the
+        mode's own pixels, so every display can be turned and no display has a
+        list of turns it will accept. What varies is only whether the
+        compositor owns the picture at all — see the output_transform event,
+        which is how a shell knows whether to offer this.
+
+        Silently ignored when the output is gone, when the value is not one of
+        the eight, and on a display the compositor does not report a transform
+        for. In each case the display keeps the orientation it has, and the
+        output_transform event says so — a shell should mark what that reports
+        rather than what it asked for.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display to turn"/>
+      <arg name="transform" type="uint" enum="transform" summary="how to turn its picture"/>
+    </request>
+
+    <request name="hide_pointer" since="12">
+      <description summary="the user has picked up something that is not the pointer">
+        Takes the cursor off screen, exactly as the compositor does by itself
+        when a key is pressed on a keyboard it can see.
+
+        It needs asking for because a controller is not a seat device: the
+        shell reads it straight from /dev/input, so a user who has put the
+        mouse down and picked a gamepad up leaves no trace the compositor
+        could notice. This is the shell saying so on their behalf.
+
+        The cursor comes back the moment the pointer next moves — a mouse, a
+        touchpad, or the shell's own stick pointer. There is deliberately no
+        request to put it back: a cursor that could be summoned without being
+        moved would appear somewhere the user is not looking, which is the
+        thing hiding it was for.
+
+        A shell driving the pointer with a stick should not send this for the
+        buttons that stick is clicking with. Those are the pointer being used,
+        not put down.
+      </description>
+    </request>
+
+    <request name="capture_output" since="17">
+      <description summary="write one display's pixels to a PNG file">
+        Photographs a whole display — everything on it, in the order it is
+        drawn: the wallpaper, every application window, the shell's own bar or
+        overlay over them — and writes it to `path` as a PNG.
+
+        This is capture_window's companion and not a wider version of it. That
+        one answers "what does this application look like", and cuts the window
+        out of its surroundings to do it. This one answers "what is on this
+        screen", which is a picture of the composite and can be taken of a
+        display with nothing running on it at all.
+
+        The picture has as many pixels as the display is driven at, turned the
+        way the display is turned. The pointer is left out: the cursor is drawn
+        by the compositor rather than being part of any surface, it is not on
+        screen at all while the session is being driven from a controller, and
+        an arrow burnt into a screenshot cannot be taken back out of it.
+
+        The path is the shell's to choose, on the same terms as capture_window:
+        absolute, into a directory that already exists, and refused otherwise.
+
+        The answer comes back as output_captured, always, for the reason
+        window_captured always answers.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display to photograph"/>
+      <arg name="path" type="string" summary="absolute path of the PNG file to write"/>
+    </request>
+
+    <request name="ask_to_share" since="18">
+      <description summary="ask the user whether an application may see a display">
+        Puts a question to the session shell: this application wants to share a
+        screen — may it, and which one? The answer comes back as
+        share_answered, always, so a portal waiting on it is never left
+        waiting.
+
+        Sent by the session's desktop portal rather than by the shell. Screen
+        sharing is not something an application does for itself: it asks
+        xdg-desktop-portal, which asks the portal backend, which is a client of
+        this compositor like any other — and the one thing that client cannot
+        do is draw. Only the shell can, and only the compositor can reach the
+        shell while a fullscreen application holds the screen.
+
+        id is the asking client's own number for this question, unique among
+        the questions it currently has outstanding, and is quoted back in the
+        answer. app_id is what the application asking calls itself, for the
+        shell to name in the question; it may be empty, and a shell should then
+        say so rather than showing an empty name.
+
+        The question goes to every other client bound to this interface, and
+        never back to the one that asked. In a running session that is the
+        shell, which is the only client that has anywhere to put it.
+
+        Refused outright when nobody can be asked — no shell has bound this
+        interface, or none new enough to hear the question — because a
+        screen shared without anybody being asked is the thing this request
+        exists to prevent.
+      </description>
+      <arg name="id" type="uint" summary="the asking client's number for this question"/>
+      <arg name="app_id" type="string" summary="what the application asking calls itself"/>
+    </request>
+
+    <request name="answer_share" since="18">
+      <description summary="answer a share_request">
+        The shell's answer to one share_request: the display the user chose, or
+        nothing at all, which is the user saying no.
+
+        Answering a question nobody asked, or one that has already been
+        answered, is ignored — a client that has gone away takes its question
+        with it.
+      </description>
+      <arg name="id" type="uint" summary="the question, from share_request"/>
+      <arg name="output" type="object" interface="wl_output" allow-null="true"
+           summary="the display that may be shared, or nothing for a refusal"/>
+    </request>
+
+    <request name="keep_out_of_sight" since="19">
+      <description summary="run this application without ever showing it">
+        Names an application whose windows are never to reach the screen. They
+        are not drawn, they are not announced as windows on any display, they
+        are never given the keyboard, and the pointer passes through them. The
+        application itself is untouched: it is mapped, configured and drawing
+        exactly as it would be, and it is simply never looked at.
+
+        This is for a program the shell drives rather than presents. The Steam
+        client is the one that needs it — the shell signs it in, starts games
+        through it and reads its library, all of which it does perfectly well
+        with nobody watching, but which it punctuates with windows of its own:
+        a "starting game" dialog over the shell's own loading screen, and its
+        whole storefront raised on top of a game that is trying to start. From
+        the user's side those are the shell failing to hide its plumbing.
+
+        Hiding is the shell's to give back. A user who asks for Steam's own
+        window — to verify a game's files, or to see the client itself — is
+        asking for exactly the thing this suppresses, so the shell sends this
+        again with hidden set to zero before asking Steam for it.
+
+        Sending it for an application with windows already on screen takes
+        them off it, and giving sight back puts them where they were. An empty
+        app_id names nothing and is ignored, rather than hiding every window
+        that never set one.
+      </description>
+      <arg name="app_id" type="string" summary="what the application calls itself"/>
+      <arg name="hidden" type="uint" summary="1 to keep its windows off the screen, 0 to show them again"/>
+    </request>
+
+    <request name="let_this_window_be_seen" since="40">
+      <description summary="one exception to keep_out_of_sight">
+        Lets a single window of a hidden application through, without giving
+        the application itself back. It is drawn, listed, focusable and
+        clickable exactly as any other window; everything else the application
+        owns stays where keep_out_of_sight put it.
+
+        This exists because a program the shell drives rather than presents
+        still stops and asks things. Valve's client is the one that needs it:
+        it signs itself in, fetches games and reads a library with nobody
+        watching, and then puts up a window that nothing will get past until
+        somebody answers it — a sign-in, an agreement, a licence key, a
+        parental code, a conflict between two saves. Hidden, that window is a
+        session where Steam has silently stopped and the screen says nothing.
+
+        The compositor takes no view of which window that is. It says what it
+        is hiding, through unseen_window, and the shell — which knows what it
+        asked the application for and what it is still waiting on — decides.
+
+        The exception is on the window, not on the application, and it lasts
+        as long as the window does: a compositor that has forgotten a window
+        has forgotten this about it too, and an id reused for another window
+        starts hidden like everything else. Naming a window that does not
+        exist, or one whose application is not hidden at all, does nothing.
+      </description>
+      <arg name="id" type="uint" summary="the window, from unseen_window"/>
+      <arg name="seen" type="uint" summary="1 to let this one window through, 0 to put it back"/>
+    </request>
+
+    <request name="set_output_night_light" since="20">
+      <description summary="warm one display's picture, or stop">
+        Puts a night light — a blue light filter — on one display: everything
+        it shows is tinted towards the given colour temperature, so a screen
+        looked at in the evening is not a daylight-white one.
+
+        It is the CRTC's gamma ramp, which is why it is the compositor's to
+        carry out for the reason HDR is: the ramp is a KMS property on a
+        pipe only a modesetting client may commit to, it acts on everything
+        scanned out rather than on anything a client drew, and it has to
+        survive the shell being restarted.
+
+        temperature is in kelvin, and lower is warmer: 6500 K is ordinary
+        daylight white and is what an untinted display already shows, 4000 K
+        is an evening setting, and 2000 K is candlelight. It is clamped into
+        the range this compositor can encode rather than refused, because a
+        display left at some other temperature is a worse way to report a
+        number out of range than the nearest one that means something.
+
+        The two values go together because they are one ramp and are applied
+        as one commit, which is also what makes this idempotent: an unchanged
+        pair is recognised and costs nothing.
+
+        *When* the light is on is the shell's, not the compositor's. A
+        schedule is a clock and a time zone, and both belong to the session
+        that has a Settings page to set them on — so the shell sends enabled
+        = 1 when its own schedule says the light should be burning now, and
+        0 when it should not.
+
+        This composes with set_output_hdr rather than competing with it. On a
+        display being driven in HDR the tint is folded into the same ramp
+        that does the PQ encoding, so both are in force at once and neither
+        undoes the other.
+
+        Ignored, with the setting remembered, when the display has no gamma
+        ramp to warm: see the output_night_light event, which is how a shell
+        knows whether to offer this at all. Silently ignored when the output
+        is gone.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display to warm"/>
+      <arg name="enabled" type="uint" summary="1 to warm the picture now, 0 to leave it alone"/>
+      <arg name="temperature" type="uint"
+           summary="colour temperature in kelvin; lower is warmer, 6500 is daylight"/>
+    </request>
+
+    <request name="set_output_place" since="21">
+      <description summary="put one display at this place in the layout">
+        Moves a display along the row the compositor lays its displays out in:
+        the screen the user calls their first one becomes place 0, the one
+        beside it place 1, and so on.
+
+        It belongs to the compositor because the arrangement is the desktop's
+        own shape. Where each display sits decides where a pointer crossing an
+        edge comes out, which display a window is tiled onto, and the
+        coordinates every client on the session is told about — none of which a
+        client can be allowed to compute for itself.
+
+        place is counted from zero, and it is an index into the displays the
+        output_place event reports rather than into every display connected.
+        A display the compositor does not place — one pinned by its own config,
+        or a session mirroring every screen onto the same region — takes no
+        part in either.
+
+        The display already at that place takes the one being vacated: this is
+        a trade, not an insertion. That is what makes it composable, which is
+        what a shell restoring a whole arrangement needs — sending one of these
+        per display, in ascending place, leaves every display where it was
+        asked for, because each request fixes one display and can only disturb
+        a place no later request names.
+
+        Silently ignored when the output is gone, when place is past the end of
+        the list, and when this display is not one the compositor places. In
+        each case the arrangement is left as it is, and the output_place events
+        say so — a shell should mark what those report rather than what it
+        asked for.
+
+        Not remembered by the compositor, unlike a mode or an orientation. Both
+        of those are written down because the alternative is a modeset a second
+        after login, which is a black screen; an arrangement costs a relayout,
+        which at login is a desktop with nothing on it yet. So the shell keeps
+        this one, and sends it when it connects.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display to move"/>
+      <arg name="place" type="uint" summary="the place it should take, counted from zero"/>
+    </request>
+
+    <request name="controller_used" since="24">
+      <description summary="the user has picked the controller back up">
+        Says that a button was pressed or a stick pushed on a controller, which
+        the compositor never sees: a shell reads its pads straight from
+        /dev/input, so a user who has put the keyboard down and taken a gamepad
+        up leaves no trace here at all. This is the counterpart of
+        hide_pointer, one step further out — that one says the mouse has been
+        put down, this one says the keyboard has.
+
+        It arms the typed event again. That event is sent once and then held
+        back until this request arrives, so the two together are one message per
+        handover rather than one per keystroke.
+
+        A shell that never sends it is told about the first key pressed after it
+        bound this interface and about nothing after that.
+      </description>
+    </request>
+
+    <request name="set_application_scale" since="25">
+      <description summary="how large applications draw themselves">
+        Sets how much larger than life every application on the session draws
+        its own interface: at 150 a window's text, buttons and margins come out
+        half again the size they would at 100, without losing a pixel of
+        sharpness.
+
+        It is the compositor's because it is not a filter over a picture — it
+        is a *smaller window told to draw at more pixels*. Each application is
+        configured with a logical size the given factor smaller than the screen
+        and told, over wp_fractional_scale_v1, that its scale is that much
+        higher; a client that honours the two renders exactly as many pixels as
+        the display has, and the compositor puts them on it one for one. So
+        nothing is stretched and nothing is resampled: the interface is drawn
+        bigger, in the same way it is drawn bigger on a high-density laptop
+        panel. A client that ignores the scale is drawn at the size it chose
+        and enlarged, which is the same graceful answer such a client gets from
+        every other compositor.
+
+        scale is in per cent of natural size, and 100 — one to one — is the
+        floor. Below it an application would be asked to draw more of its
+        interface than the display has room for, which is not what a screen
+        looked at from a sofa wants and is not what this is for; a smaller
+        number is clamped up to 100 rather than refused, as an out-of-range
+        colour temperature is clamped, because an application shown at some
+        unrelated size is a worse way to report a bad number than the nearest
+        one that means something. The ceiling is likewise a clamp.
+
+        Applications only, and Wayland ones. The shell's own surfaces are
+        untouched — it is not an application, it draws itself against the
+        display it was given, and a shell that changed size with this setting
+        would take the Settings page the user is looking at with it. Windows
+        under Xwayland are untouched too: X11 has no per-surface scale to be
+        told about, so the only thing that could be done to those windows is to
+        magnify pixels that are already drawn, and a blurred window is not what
+        somebody asking for a larger one asked for.
+
+        Session-wide, and since version 43 the *default* rather than the whole
+        answer: set_output_application_scale says it for one display, and this
+        is what every display a shell has not named draws at. A shell that
+        sends only this one gets what it always got, on every screen it has and
+        on every screen plugged in afterwards.
+
+        Not remembered by the compositor. An application is started by the
+        shell, always after the shell has connected and said what this is, so
+        there is no window that could come up at the wrong size while the two
+        agree — and the shell has the Settings page it was set on, which is
+        where a preference belongs.
+      </description>
+      <arg name="scale" type="uint"
+           summary="per cent of natural size; 100 is one to one, and the floor"/>
+    </request>
+
+    <request name="set_output_application_scale" since="43">
+      <description summary="how large applications draw themselves on one display">
+        The same setting as set_application_scale, for one display: every
+        application tiled onto this screen draws its own interface this much
+        larger than life, and the displays beside it are left as they are.
+
+        Per display because a screen is looked at from where it stands. A
+        television across a room and the panel on the desk in front of it want
+        different answers, and a session with one answer for both had to be
+        wrong about one of them — which is what this splits. The setting is
+        still about a person and a distance; what changes is that a person has
+        a different distance to each of their screens.
+
+        Which means a window carries its display's answer, and a window moved
+        between two displays is configured again for the one it lands on. That
+        is the same relayout as a window moved between screens of different
+        sizes: it is the display it is on that decides how much room it is
+        given.
+
+        scale is in per cent of natural size, clamped into the same range
+        set_application_scale is clamped into and for the same reason: 100 is
+        one to one and the floor, the ceiling is as far as this goes, and a
+        number outside them is brought to the nearer end rather than refused.
+
+        What it does to a window, what it deliberately leaves alone — the
+        shell's own surfaces, and anything under Xwayland — and why the
+        compositor writes none of it down are all as set_application_scale
+        describes. This is that setting with a display named.
+
+        A display nobody has named here draws at whatever set_application_scale
+        last said, which is natural size until a shell says otherwise. Sent for
+        a display and then for the same display again with a different number,
+        the last one stands; there is no request to go back to the session's
+        default, because a shell that wants that sends it as this display's.
+
+        Silently ignored when the output is gone.
+      </description>
+      <arg name="output" type="object" interface="wl_output"
+           summary="the display whose applications are being sized"/>
+      <arg name="scale" type="uint"
+           summary="per cent of natural size; 100 is one to one, and the floor"/>
+    </request>
+
+    <request name="set_application_resolution" since="44">
+      <description summary="how many pixels one application draws">
+        Sets the number of pixels one named application draws its picture at,
+        whatever the display it ends up on is showing. At 1280x720 on a 4K
+        screen the application lays itself out in 1280x720, renders 1280x720
+        pixels, and the compositor puts that picture over the whole display.
+
+        The opposite bargain from set_application_scale, and deliberately so.
+        That one asks for a *larger interface at the display's own sharpness*:
+        the window is made smaller and the client is told over
+        wp_fractional_scale_v1 to fill it with as many pixels as the screen
+        has. This one asks for *fewer pixels*: the window is made smaller and
+        the client is told nothing extra, so it draws exactly the picture that
+        was asked for and that picture is enlarged onto the screen. It is what a
+        console means by a game's resolution — the work of drawing a frame is
+        cut to a quarter and the frame still covers the television — and it is
+        why the two cannot be one request with a different unit.
+
+        app_id is the name a window calls itself by: an xdg_toplevel's app_id,
+        or an X11 window's class. A shell that knows an application under
+        several names sends this once per name; the compositor compares them
+        whole, ignoring case, and does not guess at what a name is short for.
+        An empty app_id is refused — nothing can be filed under nothing, and a
+        window that named itself nothing must not inherit a setting meant for
+        another.
+
+        Xwayland windows are included, unlike set_application_scale. There the
+        exclusion is honest, because there is no per-surface scale to tell an
+        X11 client about and all that could be done is to magnify what it
+        already drew. Here magnifying is the whole request: an X11 client
+        configured at 1280x720 really does draw 1280x720 pixels, and drawing
+        them over the display is what was asked for rather than a poor
+        substitute for it.
+
+        width and height are in pixels, and 0x0 means the display's own — which
+        is the answer for an application nobody has chosen for, and the way a
+        choice is taken back. A size larger than a display in either direction
+        is not carried out on that display: the window there is given the
+        display's own size, because what the size would ask for is a picture
+        shrunk to fit, which is a different setting from this one and is not one
+        this compositor offers. It is kept rather than refused all the same,
+        since a session with two screens of different sizes is one where the
+        same application can honour it on one of them and not the other.
+
+        A size that does not have the display's shape is fitted inside it, by
+        whichever of the two directions runs out first, and the window is left
+        in the display's own corner. A shell is expected to offer sizes that
+        share the shape of the screen they will be drawn on, so this is the
+        answer to a mistake rather than a feature: the picture stays the shape
+        the application drew it, which is the one thing worth protecting.
+
+        Not remembered by the compositor, for the reason set_application_scale
+        is not: every application on this session is started by the shell, the
+        shell says this before it starts one, and the shell has the menu it was
+        chosen on. A window already on screen when this arrives is configured
+        again at once, which is what makes the setting mean something while
+        somebody is looking at the application it is about.
+      </description>
+      <arg name="app_id" type="string"
+           summary="the name the application's windows call themselves by"/>
+      <arg name="width" type="uint"
+           summary="pixels across, or 0 with height for the display's own"/>
+      <arg name="height" type="uint"
+           summary="pixels down, or 0 with width for the display's own"/>
+    </request>
+
+    <request name="user_active" since="45">
+      <description summary="somebody is at the machine">
+        Says that the person in front of the machine did something the
+        compositor could not see: a button on a controller, a stick pushed. A
+        shell reads its pads straight from /dev/input, so a game played for an
+        hour with nothing but a controller leaves no trace at all in the seat
+        this compositor idles from.
+
+        It counts exactly as a key or a movement of the mouse counts: every
+        ext_idle_notification_v1 on the seat is resumed and starts its wait
+        again. That is what lets a program outside the session — a screen
+        locker, swayidle — see the same idleness the shell does.
+
+        Expected at most a few times a second while the controller is in use;
+        a timer that is minutes long is not made more accurate by being told
+        about every frame of a stick held over.
+      </description>
+    </request>
+
+    <request name="hold_the_screen" since="45">
+      <description summary="a program has asked for the screen to stay on">
+        Holds every ext_idle_notification_v1 made with get_idle_notification —
+        the kind that respects inhibitors — exactly as a zwp_idle_inhibitor_v1
+        on a surface that can be seen would, and lets them go again when sent
+        with hold set to 0.
+
+        For the programs that ask over the session bus rather than over
+        Wayland. org.freedesktop.ScreenSaver.Inhibit is how an X11 client, a
+        film player running under Xwayland and most of what SDL builds asks for
+        the screen to stay lit, and the session bus is the shell's rather than
+        this compositor's, so the shell answers the call and says here whether
+        anybody is still holding it.
+
+        Notifications made with get_input_idle_notification are not held, by
+        this or by anything else: they are about the person, not about what is
+        on the screen.
+      </description>
+      <arg name="hold" type="uint" summary="1 while held, 0 to let go"/>
+    </request>
+
+    <enum name="display_power" since="45">
+      <description summary="how lit a display is kept">
+        What set_output_power asks of one display.
+      </description>
+      <entry name="on" value="0" summary="drawn as it always is"/>
+      <entry name="dim" value="1"
+             summary="drawn under a sheet that takes most of its light away"/>
+      <entry name="off" value="2"
+             summary="faded to black and then switched off at the connector"/>
+    </enum>
+
+    <request name="set_output_power" since="45">
+      <description summary="dim a display, switch it off, or bring it back">
+        Sets how lit one display is kept while nobody is using the machine.
+
+        dim draws a black sheet over the whole display — over every
+        application, the shell's own surfaces and the cursor — that leaves a
+        little under half of its light: enough to see that the machine has not
+        gone anywhere, little enough to be plainly waiting. A panel wired into
+        the machine is better dimmed by its own backlight, which saves the
+        power this cannot, and a shell that has one is expected to use it and
+        send on for that display.
+
+        off takes the display to black over about a second and then switches
+        it off at the connector, which on a panel is the backlight going out
+        and on a monitor is the monitor going to sleep. While it is off,
+        nothing on it is on screen: its windows are sent no frames and the
+        applications they belong to are stopped, exactly as on a display
+        resting behind cover_output_in_black. A nested compositor has no
+        connector to switch off and keeps the black instead.
+
+        on brings it back — the connector first, then the picture up out of
+        the black in about a quarter of a second — and continues what was
+        stopped before the first frame of it.
+
+        Input does not bring a display back by itself. The shell hears about
+        activity through ext_idle_notification_v1 and is expected to send on
+        when it does, which keeps the one decision about the screen in the one
+        place that knows about the controller as well as the keyboard. A shell
+        that goes away takes its decisions with it: every display is brought
+        back when the last lxb_shell_v1 is destroyed.
+
+        Silently ignored when the output is gone.
+      </description>
+      <arg name="output" type="object" interface="wl_output"
+           summary="the display being dimmed, switched off or brought back"/>
+      <arg name="power" type="uint" enum="display_power"
+           summary="how lit it is to be kept"/>
+    </request>
+
+    <request name="cover_in_black" since="26">
+      <description summary="fade every display to black, or bring it back">
+        Draws one black sheet over each display — over every application, over
+        the shell's own surfaces, over the cursor — and fades it in over about
+        half a second. Sent again with covered set to 0, it fades back off.
+
+        This is what a console does on its way out. The session shell asks for
+        it when the user chooses to turn the machine off, and only then does it
+        run the command that ends the session: a shutdown that cut straight to
+        black would look like a display losing its signal, and there is no
+        difference on screen between that and a crash.
+
+        It has to be the compositor's sheet rather than the shell's. The shell
+        draws one surface per display and an application in front of it owns
+        the screen; a shell that blacked out its own surfaces would darken the
+        display the menu was on and leave a game running on the other one.
+
+        While the curtain is anything but fully up the session takes no input
+        at all — not the keyboard, not the pointer, not a touch, and not the
+        compositor's own bindings. A machine on its way down must not be
+        driven, and half a second is long enough to press something in. That
+        includes the bindings that would leave the session, so a client which
+        asks for this and then does not go must take it back up again; see
+        screen_is_black for the answer that says it is safe to leave.
+
+        The pixels are the only thing this touches. Applications are not
+        stopped, not resized and not told anything: they are simply not
+        visible, and what they were doing when the machine went is what they
+        were doing.
+      </description>
+      <arg name="covered" type="uint" summary="1 to fade to black, 0 to fade back off it"/>
+    </request>
+
+    <request name="cover_output_in_black" since="27">
+      <description summary="fade one display to black, or bring it back">
+        The same black sheet cover_in_black draws, over one display instead of
+        over the session, and with none of that request's authority over the
+        rest of it.
+
+        This is what a screen nobody is looking at rests behind while a game is
+        being played on another one. An OLED panel left showing a still picture
+        keeps it: the start screen's bar is in the same place every second it
+        is up, and a second screen left on it for the length of an evening's
+        play is the worst case there is. So the shell asks for the black once
+        that display has been left alone, and asks for it back the moment the
+        user goes near it again.
+
+        It has to be the compositor's sheet for the reason the session's is:
+        the shell owns one surface per display, and everything else on that
+        display — an application in front of it, the cursor over the top —
+        belongs to somebody else. A shell blacking out its own surfaces would
+        leave a paused film and a pointer lit on the screen it was resting.
+
+        Unlike cover_in_black this takes nothing away. The session goes on
+        taking input while it is down, on this display and on every other: the
+        whole point is that moving the pointer onto a resting screen brings it
+        back, and a curtain that swallowed the movement could never be lifted
+        by it. Nothing is hidden from any client either — no window is told
+        anything, resized, or stopped — because a display resting is a fact
+        about the panel and not about what is running on it.
+
+        The fade is a second going down and a quarter of a second coming back
+        up, eased at both ends, and reversible from wherever it has got to: a
+        pointer that arrives halfway through brings the screen back from half
+        black rather than from all of it.
+
+        Asking for what a display is already doing costs nothing and does not
+        restart the fade. Silently ignored when the output is gone.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display to rest"/>
+      <arg name="covered" type="uint" summary="1 to fade to black, 0 to fade back off it"/>
+    </request>
+
+    <request name="keep_awake" since="28">
+      <description summary="this application is playing something; do not stop it">
+        Names an application that must go on running even with nothing of it on
+        screen. Everything else about it is unchanged: it is not drawn, it is
+        not given the keyboard, and it is not put in front of anything. It is
+        simply not stopped.
+
+        An application nobody can see is stopped outright — that is what keeps
+        a covered game from going on playing its music into the room — and the
+        one thing that rule is wrong about is an application whose whole
+        purpose is the sound it is making. A game covered by the start screen
+        should fall silent. Music the user put on should not, and neither
+        should the stream they are listening to while they play.
+
+        The compositor cannot tell those apart. The difference is not in the
+        window, not in the process tree and not in the audio: a game's
+        soundtrack and an album are both a program feeding a sink. It is on the
+        session bus, where a media player says what it is playing and whether
+        it is playing it, and the shell is the half of this session that is on
+        a bus at all.
+
+        So the shell decides and this carries the answer. What it means by it
+        is deliberately narrow — an application that both announces itself as a
+        media player and is audibly playing, which no game does — and it is
+        held for a short while after the sound stops, because the silence
+        between two tracks is not the end of the music and an application
+        stopped in that gap would never reach the next one.
+
+        Sent again with awake set to zero when that stops being true. An
+        application named here while it is already stopped is started again at
+        once. An empty app_id names nothing and is ignored.
+      </description>
+      <arg name="app_id" type="string" summary="what the application calls itself"/>
+      <arg name="awake" type="uint" summary="1 to keep it running unseen, 0 to let it be stopped again"/>
+    </request>
+
+    <enum name="pip_size" since="29">
+      <description summary="how large a picture-in-picture window is drawn">
+        Three sizes rather than a number of pixels, for the reason the shell
+        offers three: what the user is choosing is how much of the screen they
+        are willing to give up, and a display's own size is the compositor's to
+        read. Each is a share of the display's width, so the same choice is the
+        same fraction of a laptop panel and of a television across the room.
+
+        How *tall* the window is at that width is the window's own business.
+        The compositor asks it what shape it wants to be — a configure carrying
+        no size, which is xdg-shell for "choose one" — and follows the answer,
+        so a video that is four to three is drawn four to three and one stood on
+        its end is drawn standing on its end. It goes on following it, so a
+        video swapped for one of another shape in the same window is drawn in
+        the new one.
+      </description>
+      <entry name="small" value="0" summary="a sixth of the display's width"/>
+      <entry name="medium" value="1" summary="a quarter of it"/>
+      <entry name="large" value="2" summary="a third of it"/>
+    </enum>
+
+    <enum name="pip_place" since="29">
+      <description summary="which corner a picture-in-picture window sits in">
+        The four corners, and only the four corners. A floating window on a
+        console is not dragged anywhere — there is no pointer in the user's
+        hand to drag it with — so what a page can honestly offer is the corner
+        it starts in, and every corner is the same distance from the edges.
+
+        A second such window, opened while the first is still up, stands below
+        it in a column from that corner rather than on top of it: two of them in
+        one place is one window with something wrong with it.
+      </description>
+      <entry name="top_left" value="0" summary="the upper left corner"/>
+      <entry name="top_right" value="1" summary="the upper right corner"/>
+      <entry name="bottom_left" value="2" summary="the lower left corner"/>
+      <entry name="bottom_right" value="3" summary="the lower right corner"/>
+    </enum>
+
+    <enum name="pip_command" since="30">
+      <description summary="what was chosen from a floating window's menu">
+        The rows of the menu a compositor raises with pip_menu that only a
+        compositor can carry out. The two that move the window to another
+        display are move_window_to_output, which already exists and means
+        exactly this for every other window; the row that puts the window back
+        to filling its display is set_window_floating, which is the same
+        sentence said in both directions; and the row that dismisses the menu
+        never leaves the shell at all.
+      </description>
+      <entry name="move" value="0"
+             summary="carry the window with the pointer until a button is clicked"/>
+      <entry name="resize" value="1"
+             summary="resize it from a corner until a button is clicked"/>
+      <entry name="close" value="2" summary="ask the window to close"/>
+      <entry name="realign" value="3" since="34"
+             summary="put it back in the column, at the size the settings ask for"/>
+    </enum>
+
+    <enum name="pip_handle" since="31">
+      <description summary="what a controller has hold of a floating window by">
+        A pointer takes hold of a floating window by whatever is under it — an
+        edge to pull, the middle to carry. A controller has nothing under it,
+        so it has to be told which of the two it is doing.
+
+        resize does not name a corner. Which corner a window grows from is not
+        something the user chose, and not something a shell can answer better
+        than the compositor can: it is the corner with the most room between the
+        window and the edge of the display, which is a fact about a layout the
+        compositor owns.
+      </description>
+      <entry name="move" value="0" summary="carry the whole window"/>
+      <entry name="resize" value="1"
+             summary="pull it larger and smaller from the corner with the most room"/>
+    </enum>
+
+    <request name="set_picture_in_picture" since="29">
+      <description summary="whether a video floats over everything, and where">
+        Sets what the compositor does with a window a browser has put into
+        picture-in-picture: the small always-on-top player somebody keeps a
+        match or a lecture in while they use the machine for something else.
+
+        Such a window says what it is in its title, and says it in the one
+        string every browser that has the feature agrees on —
+        "Picture-in-Picture". That is what the compositor matches, and it is
+        the whole of the test. It cannot be an app_id: the window belongs to
+        the browser and calls itself by the browser's name, which is also what
+        the window the video came out of calls itself.
+
+        A window that answers to it is taken out of the layout every other
+        window is under. It is not maximized, it is not given the keyboard, it
+        is not listed to the shell as something to switch to or to close, and
+        it is drawn in front of everything the session has — over a fullscreen
+        game, over the shell's own start screen, and over the guide, which is
+        the one surface nothing else in this protocol is allowed in front of.
+        That is what the feature is: a window that is still there while the
+        user does something else. It is drawn with a hairline surround and its
+        own corners rounded, held off the edges of the screen by the radius the
+        shell gives its menus, so that what floats over the session is spaced
+        the way the session is — and it is drawn *only* there, and *all* of
+        there: a client that puts its own drop shadow outside its window, or
+        that will not take the size it is given, is clipped to that shape rather
+        than allowed to spill past it, and whatever it leaves uncovered inside
+        that shape is filled rather than left to show the session through.
+
+        enabled turns the whole of that off again. A compositor told zero
+        treats such a window as the application window it otherwise is —
+        maximized, listed, focusable — which is the layout this shell had
+        before it could be asked, and is the honest answer for somebody who
+        does not want a video following them around.
+
+        The three arguments arrive together because they are one rectangle. A
+        size sent without its corner, or a corner without its size, would move
+        the window twice for one press.
+
+        size and place describe where such a window *starts*. A compositor may
+        let the user move and resize one by hand — this one does, with a mouse —
+        and a window that has been moved keeps where it was put rather than
+        following these: it is out of the corner and out of the column below it,
+        and the place it stood in is free for the next window that floats. What
+        puts it back is this request arriving with a different size or corner,
+        which is the user saying on the page where they want their videos.
+
+        Not remembered by the compositor. The shell says what this is as soon
+        as it connects, before any application exists to put a video in — the
+        same bargain set_application_scale is under, and for the same reason:
+        the preference belongs to the page it was set on.
+      </description>
+      <arg name="enabled" type="uint"
+           summary="1 to float such a window, 0 to treat it as an ordinary one"/>
+      <arg name="size" type="uint" enum="pip_size" summary="how large to draw it"/>
+      <arg name="place" type="uint" enum="pip_place" summary="which corner to put it in"/>
+    </request>
+
+    <request name="pip_menu_command" since="30">
+      <description summary="carry out a row of the floating window's menu">
+        Sent when the user chooses one of the rows of the menu a pip_menu event
+        asked for. Only the rows a client cannot carry out itself arrive here —
+        see the pip_command enum, which is the whole list.
+
+        move and resize hand the pointer to the compositor: it is put on the
+        window (in the middle of it, or on the corner being pulled), the window
+        follows it, and the next click leaves the window where it is. Nothing is
+        held down throughout, because nothing was held down to begin with — the
+        user let go of the button that chose the row. A click of any other
+        button puts the window back where it was.
+
+        close asks the window to close, exactly as close_foreground does, and is
+        deliberately not close_window: that one ends the *application*, and the
+        application here is a browser with the rest of somebody's session in it.
+        What this ends is one video in one corner, which the browser answers by
+        putting it back in the page it came from.
+
+        Silently ignored when the window is gone, when it is not floating any
+        more, or when the number is not a command this compositor knows.
+      </description>
+      <arg name="id" type="uint" summary="the window, from pip_menu"/>
+      <arg name="command" type="uint" enum="pip_command" summary="the row that was chosen"/>
+    </request>
+
+    <request name="pip_select" since="31">
+      <description summary="which floating window the shell's own controls are on">
+        Names the floating window the user has the directions on, so the
+        compositor can mark it. A console has no pointer: the only way to say
+        which of two videos in a corner a button is about is to select one and
+        show which one is selected, and only the compositor can show it — the
+        window is drawn in front of every surface this shell owns, so a mark
+        drawn by the shell would be behind the thing it is marking.
+
+        An id of zero selects nothing, which is the resting state and the one to
+        go back to whenever the shell stops offering the controls: the overlay
+        closing, the display being handed to another screen, the window going
+        away.
+
+        accent is the colour to mark it in, as 0xRRGGBB. It travels with the
+        selection because it is the shell's, not the compositor's: it is the
+        accent the user chose, it changes while they choose it, and a compositor
+        that read it out of the shell's settings for itself would be a second
+        copy of that answer, drifting.
+
+        Silently ignored for a window that is gone or is not floating.
+      </description>
+      <arg name="id" type="uint" summary="the window, from pip_window, or 0 for none"/>
+      <arg name="accent" type="uint" summary="the colour to mark it in, 0xRRGGBB"/>
+    </request>
+
+    <request name="pip_grab" since="31">
+      <description summary="take hold of a floating window without a pointer">
+        Starts moving or resizing a floating window on a controller's behalf.
+        The window follows the deltas of pip_drag from here until pip_drop ends
+        it, exactly as it follows a pointer that has hold of it — same
+        arithmetic, same limits, same detaching from the corner it started in.
+
+        Nothing is warped and nothing is pressed: no pointer is involved at any
+        point, and whatever the pointer is over goes on hearing about it. That
+        is the whole difference between this and the move and resize rows of
+        pip_menu_command, which are the same two acts done with a mouse.
+
+        A second grab while one is already under way is ignored, as is one on a
+        window that is gone or not floating. There is one hand on one window at
+        a time on this session, whichever control it belongs to.
+      </description>
+      <arg name="id" type="uint" summary="the window, from pip_window"/>
+      <arg name="handle" type="uint" enum="pip_handle" summary="carry it or resize it"/>
+    </request>
+
+    <request name="pip_drag" since="31">
+      <description summary="move the window a controller has hold of">
+        Moves or resizes the window pip_grab took hold of by a relative amount,
+        in logical pixels. Deltas accumulate; sending one every controller poll
+        is the intended shape, as it is for move_pointer.
+
+        Each step is measured from where the window is *now* rather than from
+        where the grab started, so a stick held into the edge of the display
+        does not build up travel the user has to push back out of before the
+        window moves again.
+
+        For a resize the delta is read as the pull on the corner the compositor
+        chose, and the window keeps the shape its own client asked to be: one of
+        the two numbers is what the stick said and the other is what that shape
+        makes of it.
+
+        Ignored while nothing is held.
+      </description>
+      <arg name="dx" type="fixed" summary="horizontal movement, logical pixels"/>
+      <arg name="dy" type="fixed" summary="vertical movement, logical pixels"/>
+    </request>
+
+    <request name="pip_drop" since="31">
+      <description summary="let go of the window a controller had hold of">
+        Ends the grab. keep of 1 leaves the window where the drags left it; 0
+        puts it back where it was when the grab started — which is a state and
+        not only a rectangle, so a window that was standing in the corner the
+        settings put it in goes back to standing there.
+
+        Ignored while nothing is held.
+      </description>
+      <arg name="keep" type="uint" summary="1 to leave it where it is, 0 to put it back"/>
+    </request>
+
+    <request name="set_pointer" since="37">
+      <description summary="how the pointing devices behave">
+        Sets the four things a session decides about a mouse: how fast the
+        pointer travels for a given movement of the hand, how large the
+        compositor draws it, how far one notch of a wheel carries the content
+        under it, and which way that content goes.
+
+        The compositor's because every one of them is: three are libinput
+        settings on a device the shell never opens — only the compositor holds
+        the seat — and the fourth is the size of a picture the compositor is
+        the one drawing. A shell could not carry any of them out.
+
+        **Every pointing device the seat has**, and not only the ones that are
+        mice: a trackball, a touchpad and a controller's trackpad all move the
+        same pointer, and a session where the speed applied to one of them and
+        not the other would be a setting that works on some desks and not
+        others. A device libinput says cannot do one of these keeps whatever it
+        does — a mouse has no tap-to-click and a trackball may have no
+        acceleration curve — and that is not an error.
+
+        Applied at once, and to the devices already plugged in as well as to
+        the next one: this arrives while somebody is looking at the page they
+        set it on, and a speed that waited for a replug would read as a press
+        that did nothing.
+
+        speed is libinput's own acceleration setting in hundredths, -100 to
+        100, where 0 is the flat default every desktop starts at. It is not a
+        multiplier and the scale is not linear — what libinput does with it
+        depends on the device's own resolution — which is exactly why it is
+        passed through rather than translated: the number the user chose on a
+        bar means what libinput means by it, and the two cannot drift apart.
+        Out of range is clamped rather than refused.
+
+        size is the cursor's nominal size in logical pixels, as XCURSOR_SIZE
+        counts it. An XCursor theme carries a handful of drawn sizes and the
+        nearest is used, so this is what the compositor asks for rather than
+        what it necessarily gets. It changes the cursor this compositor draws —
+        for the desktop itself and for every client that names a shape through
+        cursor-shape-v1 — and it cannot change one an application draws for
+        itself out of its own theme: a client reads XCURSOR_SIZE when it starts
+        and this cannot reach back into one that is already running. A later
+        client gets the new size, because the compositor exports it.
+
+        scroll is in per cent, 100 being one to one — the movement libinput
+        reports, unchanged. libinput has no scroll speed of its own, so this is
+        the compositor's own multiplication over the deltas it forwards, and it
+        is applied to the discrete notch count as well as to the continuous
+        value: a client that counts wheel detents must see the same setting a
+        client that reads pixels sees, or the two disagree about how far one
+        notch went.
+
+        natural is 1 for content that follows the fingers — the direction a
+        touchscreen moves, and the direction a page moves under a hand on a
+        touchpad — and 0 for the wheel's traditional direction. libinput's
+        natural-scroll, passed through.
+
+        The four arrive together because they are one page, and because three
+        of them are applied by walking the same device list: sending them
+        separately would walk it four times for one press.
+
+        Not remembered by the compositor. The shell says what these are as soon
+        as it connects — the same bargain set_application_scale is under, and
+        for the same reason: the preference belongs to the page it was set on.
+      </description>
+      <arg name="speed" type="int"
+           summary="libinput acceleration in hundredths, -100 to 100; 0 is the default"/>
+      <arg name="size" type="uint" summary="cursor size in logical pixels"/>
+      <arg name="scroll" type="uint"
+           summary="per cent of the movement reported; 100 is one to one"/>
+      <arg name="natural" type="uint"
+           summary="1 for content that follows the fingers, 0 for the wheel's direction"/>
+    </request>
+
+    <request name="set_keyboard_layout" since="38">
+      <description summary="which arrangement every keyboard is set to">
+        Sets the xkb layout and variant the seat's keyboards use. The two names
+        xkbcommon takes, unchanged: "pl" and "" for the Polish layout, "us" and
+        "dvorak" for that arrangement of the American one.
+
+        The compositor's because the seat is. A shell has never held a keyboard
+        — the one it draws types through zwp_virtual_keyboard_v1 with a keymap
+        of its own — so nothing but the compositor can change what the keys on
+        the desk produce.
+
+        Applied to the seat rather than per device, which is what xkb is: a
+        keymap belongs to the seat's keyboard and every physical board on it
+        types through the same one. It takes effect at once, including for
+        clients already running: a Wayland client is sent the new keymap and
+        the modifier state that goes with it.
+
+        A layout xkbcommon cannot compile is refused and the seat is left as it
+        was. This is the one setting where falling back to something else would
+        be worse than doing nothing: a machine whose keyboard silently became
+        American is a machine somebody may not be able to type their password
+        into. The compositor is expected to say so in its log and go on.
+
+        Not remembered by the compositor, on the same terms as
+        set_application_scale and set_pointer: the preference belongs to the
+        page it was set on. What the compositor's own configuration says is
+        what it starts at, and this replaces it for the session.
+      </description>
+      <arg name="layout" type="string" summary="xkb layout name, e.g. pl"/>
+      <arg name="variant" type="string"
+           summary="xkb variant name, empty for the layout's own arrangement"/>
+    </request>
+
+    <request name="set_menu_surface" since="32">
+      <description summary="which surface of the shell's is its context menu">
+        Names a surface the shell draws its context menu on, and nothing else.
+        A compositor draws that surface **in front of** the windows
+        set_picture_in_picture floats, where it draws every other surface the
+        shell owns behind them, and lets a press inside its input region be the
+        shell's rather than the window's.
+
+        A floating window is drawn over everything, which is what the feature
+        is — and a window the user has made large enough covers the very menu
+        that offers to make it small again. On a console that is a dead end:
+        there is no pointer to find an unseen row with, so a menu that cannot be
+        seen cannot be answered. So one surface is allowed over such a window,
+        and it is the one the menu is on.
+
+        A surface of its own rather than a rectangle of the shell's main one,
+        because a menu's panel is **rounded** and a rectangle is not: a
+        compositor lifting the panel's bounding box would put four square
+        corners of the start screen over the video, where the video is what
+        should be showing. Given its own surface the panel is exactly its own
+        shape, whatever that shape is, and everything around it is transparent.
+
+        The shell is expected to make this a subsurface of the surface it would
+        otherwise have drawn the menu on, so that the two commit together and no
+        frame can show one without the other. A compositor draws it wherever the
+        surface's own geometry puts it, which for a subsurface is where its
+        parent and its offset put it; nothing here moves it.
+
+        Sent for as long as a menu is up and not a moment longer: before the
+        frame that draws the first panel, and null again after the last one.
+        Everything a compositor does about this is per-frame and per-press work,
+        and none of it is owed on a session where nobody has opened a menu.
+
+        One at a time. A shell that draws menus on several surfaces names
+        whichever is carrying the menu now; naming a second forgets the first.
+        A null surface forgets whatever was named, and a surface that is
+        destroyed is forgotten with it.
+      </description>
+      <arg name="surface" type="object" interface="wl_surface" allow-null="true"
+           summary="the shell's menu surface, or null to forget the last one"/>
+    </request>
+
+    <event name="guide">
+      <description summary="the guide binding was activated">
+        Sent when the user pressed the compositor's guide binding. The shell is
+        expected to show or hide its overlay.
+
+        The compositor routes this itself because the shell has no keyboard
+        focus while an application is running, which is precisely when the user
+        needs a way back out of it.
+      </description>
+    </event>
+
+    <event name="keyboard" since="6">
+      <description summary="the on-screen keyboard binding was activated">
+        Sent when the user pressed the compositor's on-screen keyboard
+        binding. The shell is expected to show or hide its keyboard.
+
+        Routed by the compositor for the same reason the guide event is: the
+        shell has no keyboard focus while an application is running, and a
+        keyboard that could only be summoned by a client already holding the
+        keys would be of no use to anyone.
+
+        Nothing else about typing goes over this interface. An application
+        announces its text fields with zwp_text_input_v3, the shell hears
+        about them as zwp_input_method_v2, and it types with
+        zwp_virtual_keyboard_v1 — all three of which are standard, and none
+        of which can express a binding the compositor has to intercept.
+      </description>
+    </event>
+
+    <enum name="volume_change" since="22">
+      <description summary="what a volume key asked for">
+        One step of the machine's own volume, in the direction the key pressed
+        is printed with, or the switch that silences it.
+
+        A step rather than a value: which value one press is worth is a
+        question about the control the shell draws, and the compositor has no
+        opinion about it.
+      </description>
+      <entry name="up" value="0" summary="one step louder"/>
+      <entry name="down" value="1" summary="one step quieter"/>
+      <entry name="mute" value="2" summary="silence it, or bring it back"/>
+    </enum>
+
+    <event name="volume" since="22">
+      <description summary="a volume key was pressed">
+        Sent when the user pressed one of the keys the session's volume is set
+        with. The shell is expected to move its own volume control by one step,
+        or to silence the session, and to say on screen that it did.
+
+        Routed by the compositor for the reason the guide, keyboard and
+        screenshot events are: a fullscreen application holds the keyboard, and
+        a volume key that only worked while the shell had focus would be one
+        that never worked over the game somebody was turning down.
+
+        The compositor forwards the press rather than setting the volume itself
+        because the mixer belongs to the shell's half of the session. It is the
+        shell that found out which sound server this machine has, that knows
+        where the control stands, and that has somewhere to draw it; a
+        compositor that shelled out to a mixer of its own would be a second
+        opinion about the volume, one step out of step with the bar the user
+        can see.
+
+        A key held down repeats, at the seat's own repeat rate, in the
+        direction it was pressed. Mute does not: a switch held down is a switch
+        thrown once.
+      </description>
+      <arg name="change" type="uint" enum="volume_change" summary="what the key asked for"/>
+    </event>
+
+    <event name="output_pressed" since="23">
+      <description summary="the user pressed an application on one display">
+        Sent when a pointer button or a finger landed on an application window,
+        naming the display it landed on. The shell is expected to treat that
+        display as the one the user is now driving, exactly as it does a press
+        made on its own surface there.
+
+        A shell drawing itself on every display keeps its own idea of which one
+        is being driven, and it can see a press move that for itself only while
+        its own surfaces are in front — the press is delivered to the surface it
+        was made on. Once an application is in front of it, it sees nothing at
+        all: its overlay hands the clicks through so the application under it
+        stays usable with a mouse, and so the very press that says "the user is
+        over here now" is the one press the shell never hears about. On a
+        machine with the launcher on one screen and a game on another, clicking
+        the game left the launcher driving the first screen, which is where the
+        guide then opened and where the next application started.
+
+        Only presses the shell has no other way to learn about are sent. A press
+        on one of its own surfaces is delivered to that surface and is not
+        repeated here — a shell that were told twice would move control on the
+        compositor's word before it had read the press itself, turning a click
+        that should only have claimed the display into one that also pressed
+        whatever it landed on.
+
+        Nor is a press repeated on the display it was last sent for, so that
+        clicking about inside a game does not wake the shell once per click. The
+        compositor forgets that display whenever the shell names one with
+        set_launch_output, because a shell that has moved on its own has to be
+        able to hear about a press back on the display it left.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display the press landed on"/>
+    </event>
+
+    <event name="typed" since="24">
+      <description summary="the user pressed a key on a keyboard">
+        Sent when a key goes down on a keyboard the compositor can see: the
+        user saying with their hands that the controller is not what they are
+        holding. A shell is expected to put away what it is offering that
+        controller — the corner chip naming the buttons that summon its
+        on-screen keyboard, and the keyboard it would raise over a text field
+        of its own accord.
+
+        Forwarded for the reason the guide, keyboard and volume events are, and
+        with more at stake than any of them: while a fullscreen application owns
+        the keyboard the shell is sent no keys whatsoever, and that is exactly
+        the moment this answers for — somebody typing into a game's chat box,
+        with a chip in the corner of the screen telling them which buttons to
+        press for a keyboard they already have under their hands.
+
+        Only keys from a device the compositor reads itself. What a shell sends
+        through zwp_virtual_keyboard_v1, and the arrows it sends with
+        keyboard_key, are the shell typing on the user's behalf and are never
+        reported back to it as the user typing.
+
+        Sent once, and then held back until the shell says the controller has
+        been picked back up with controller_used. Somebody writing a message in
+        a game would otherwise wake the shell once per letter to tell it
+        something it was told at the first one. It is armed again whenever a
+        shell binds this interface, because a shell that has just started has
+        been told nothing.
+      </description>
+    </event>
+
+    <event name="foreground">
+      <description summary="the foreground application changed">
+        Names the topmost application window so the shell can label its
+        overlay. The title is empty when no application window exists, which is
+        how the shell learns that an application it started has exited.
+
+        Sent once when the object is bound, and again on every change.
+
+        Describes the session as a whole, which is only the right answer for a
+        shell that has one place to show it. Superseded by output_foreground,
+        and not sent at all to clients bound at version 3 or above.
+      </description>
+      <arg name="title" type="string" summary="window title, or empty when nothing is running"/>
+    </event>
+
+    <event name="output_foreground" since="3">
+      <description summary="the foreground application on one display changed">
+        Names the topmost application window on one display, or the empty
+        string when that display has none.
+
+        A shell drawing a bar on every display needs this rather than the
+        unqualified foreground event: its overlay belongs to the display the
+        user is on, so labelling it with the session's topmost window offers to
+        resume, or close, an application on a screen the user is not looking
+        at.
+
+        Sent once per display when the object is bound, and again on every
+        change.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display"/>
+      <arg name="title" type="string" summary="window title, or empty when nothing is running there"/>
+    </event>
+
+    <event name="output_window" since="4">
+      <description summary="one window on a display">
+        Describes one application window, for the shell's overview. A batch of
+        these followed by output_windows_done replaces everything previously
+        known about that display; windows are listed topmost first, so the
+        first one is the application the user was just looking at.
+
+        The size is what the window occupies on the display, which is not
+        always the logical size its client was configured at: an application
+        drawing larger than life is configured smaller than the screen by that
+        factor and then drawn back out across the whole of it. The shell is
+        given the size on the screen because that is what both of its questions
+        are about — aspect-fitting a selection frame to the card the compositor
+        will draw, and deciding whether an application covers the bar, which is
+        what stops the shell drawing a start screen nobody can see. Told the
+        configured size instead, a session with larger applications never
+        believed any of them covered anything.
+
+        Sent once per display when a version 4 object is bound, and again
+        whenever the display's windows or their titles change.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display"/>
+      <arg name="id" type="uint" summary="stable handle for activate_window"/>
+      <arg name="title" type="string" summary="window title"/>
+      <arg name="width" type="uint" summary="logical width"/>
+      <arg name="height" type="uint" summary="logical height"/>
+    </event>
+
+    <event name="output_window_app_id" since="13">
+      <description summary="what one listed window's application is">
+        Names the application one window of the batch belongs to, the way the
+        application names itself — its xdg_toplevel app_id, or an X11 window's
+        class. Sent immediately after the output_window it describes, and only
+        when there is one to send: a client that set neither leaves its window
+        with no name rather than an empty one.
+
+        output_window carries the *title*, which is what a card prints and
+        exactly what nothing can be matched on: a title is a document, a
+        directory, a track that is playing. A shell that has to answer "is
+        this application already running?" — as it must before starting a
+        second copy of something the user only wanted to come back to — needs
+        the name that stays the same while the application runs, and that it
+        can also work out from the application's desktop entry before it has
+        ever been started.
+
+        Carried per window rather than per display, unlike output_app_id,
+        because the question is about every window on the display and not only
+        the one in front.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display"/>
+      <arg name="id" type="uint" summary="the window, from the preceding output_window"/>
+      <arg name="app_id" type="string" summary="the application's own name for itself"/>
+    </event>
+
+    <event name="output_window_pid" since="39">
+      <description summary="which process drew one listed window">
+        Names the process behind one window of the batch: the pid of the client
+        that created it, or for an X11 window the pid the window itself
+        advertises. Sent immediately after the output_window it describes, and
+        only when the compositor knows one — a client that connected over a
+        socket carrying no credentials, or an X11 window whose owner set no
+        _NET_WM_PID, leaves its window without this rather than with a zero.
+
+        It exists because a window says nothing about who started it. The class
+        an application announces is a name somebody chose for a program, and a
+        great many programs are started by something other than the user: a
+        game is started by a store client, a document by a file manager, a
+        window by whatever was already running. A shell that has to answer
+        "which of the things I started did this window turn out to be" can
+        otherwise only answer it by timing — the window that appeared while I
+        was waiting — which is right until two things appear at once.
+
+        The pid is a handle onto the process table and nothing more. What can
+        be read from it is the same thing anything else on the session could
+        read: this compositor grants no access with it and makes no claim about
+        what the process is.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display"/>
+      <arg name="id" type="uint" summary="the window, from the preceding output_window"/>
+      <arg name="pid" type="uint" summary="the process behind it"/>
+    </event>
+
+    <event name="output_windows_done" since="4">
+      <description summary="the window list for a display is complete">
+        Ends a batch of output_window events. The batch is the whole truth for
+        that display: a done event immediately after the last batch's windows
+        with none in between means the display has no windows at all.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display"/>
+    </event>
+
+    <event name="unseen_window" since="40">
+      <description summary="one window that is being kept off the screen">
+        Describes one window the compositor is hiding on the shell's own
+        instructions — see keep_out_of_sight. A batch of these followed by
+        unseen_windows_done replaces everything previously known about them.
+
+        The counterpart of output_window, and deliberately not part of it: a
+        hidden window is not on a display as far as anything else is
+        concerned, so it is not listed with one, is not drawn a card, and is
+        not something to switch to. It is listed at all so that the shell can
+        see what its own instruction is covering, and let one window through
+        where the application has stopped to ask something. See
+        let_this_window_be_seen.
+
+        A window let through leaves this list, because it is no longer being
+        kept off the screen: it appears in the display's ordinary window list
+        instead. So the two lists together are still the whole truth, and a
+        window that has gone from both has gone.
+
+        Sent once when a version 40 object is bound, and again whenever the
+        hidden windows, their names or their titles change. A session with
+        nothing hidden — which is nearly all of them — sends one empty batch
+        and never speaks of it again.
+      </description>
+      <arg name="id" type="uint" summary="stable handle, named as output_window names one"/>
+      <arg name="app_id" type="string" summary="the application's own name for itself"/>
+      <arg name="title" type="string" summary="window title"/>
+    </event>
+
+    <event name="unseen_windows_done" since="40">
+      <description summary="the hidden window list is complete">
+        Ends a batch of unseen_window events. The batch is the whole truth: a
+        done event with no windows before it means nothing is being kept off
+        the screen.
+      </description>
+    </event>
+
+    <event name="output_app_id" since="7">
+      <description summary="what the foreground application on one display is">
+        Names the topmost application window on one display the way the
+        application itself is named — its xdg_toplevel app_id, or an X11
+        window's class — or the empty string when that display has none.
+
+        output_foreground carries the window *title*, which is what a menu
+        should print and exactly what a setting must not be filed under: a
+        title is a document name, a working directory, a track that is playing.
+        A shell remembering a choice per application needs the name that does
+        not change while the application runs, and is the same the next time it
+        is started.
+
+        Sent alongside output_foreground: once per display when the object is
+        bound, and again on every change.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display"/>
+      <arg name="app_id" type="string" summary="application identity, or empty when nothing is running there"/>
+    </event>
+
+    <event name="output_hdr" since="9">
+      <description summary="what one display can do in HDR, and what it is doing">
+        Says whether a display can be driven in high dynamic range, and
+        whether it currently is.
+
+        A shell offering the setting has to be able to answer "why is this
+        doing nothing" before the user asks it, and there are three separate
+        reasons it might: the display never claimed HDR in its EDID, the
+        driver has no colour pipeline to do the encoding with, or the session
+        is running nested inside another compositor and owns no connector at
+        all. All three come back as supported = 0, because the shell's answer
+        is the same in each case and the reason is in the compositor's log.
+
+        enabled is what the compositor is actually doing, not what it was last
+        asked for. They differ exactly when a request could not be carried
+        out, which is the case the shell must not present as success.
+
+        max_luminance is the peak the display reports in its EDID, which is
+        what a shell should show as its "display default" peak brightness. 0
+        when the display does not say — an HDR display is not obliged to, and
+        one that stays quiet is not saying zero.
+
+        Sent once per display when a version 9 object is bound, and again
+        whenever any of it changes.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display"/>
+      <arg name="supported" type="uint" summary="1 when this display can be driven in HDR"/>
+      <arg name="enabled" type="uint" summary="1 when it currently is"/>
+      <arg name="max_luminance" type="uint"
+           summary="the display's own peak luminance in cd/m², 0 when it does not say"/>
+    </event>
+
+    <enum name="hdr_control" bitfield="true" since="10">
+      <description summary="which HDR settings a display can actually honour">
+        A display being drivable in HDR does not mean every control does
+        something on it. The colour pipeline a driver exposes decides that, and
+        what it exposes varies by hardware generation on the same driver.
+      </description>
+      <entry name="gamut" value="1"
+             summary="sRGB colour intensity does something on this display"/>
+      <entry name="gamut_exact" value="2" since="42"
+             summary="and the conversion it does is the exact one"/>
+    </enum>
+
+    <event name="output_hdr_controls" since="10">
+      <description summary="which HDR settings do something on one display">
+        Says which of the HDR settings this display can honour, as a bitmask of
+        hdr_control.
+
+        A shell has to be able to tell a control that is off from a control
+        that does nothing, and a control that does the thing exactly from one
+        that does it approximately. sRGB colour intensity is the case this
+        exists for, and it has all three answers.
+
+        It is implemented as the CRTC's colour matrix. Where the CRTC has no
+        matrix at all, gamut is unset: there is nowhere to put the conversion,
+        the picture's primaries are sent as BT.2020's, and a page that went on
+        offering the choice would be describing a display that does not exist.
+
+        Where there is a matrix but no degamma stage in front of it, gamut is
+        set and gamut_exact is not. A matrix is a gamut rotation when it acts
+        on linear light; acting on sRGB-coded values it leaves white, black
+        and the whole grey axis untouched — every row of it sums to 1 — and
+        brings saturated colour close rather than exactly right. The setting
+        works at every position; it is simply not the same picture a display
+        engine with a degamma stage would show, and a shell is expected to say
+        so rather than imply an accuracy that is not there.
+
+        Where both are set, the conversion is the exact one.
+
+        This is a separate event from output_hdr rather than another argument
+        on it because an event's arguments cannot change once it has shipped.
+
+        A shell bound below version 42 is told only gamut, and should read it
+        the way it always did: as the exact conversion, which is what every
+        display it was told about could do.
+
+        Sent alongside output_hdr: once per display when a version 10 object
+        is bound, and again whenever it changes.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display"/>
+      <arg name="controls" type="uint" enum="hdr_control"
+           summary="the settings this display can honour"/>
+    </event>
+
+    <event name="output_night_light" since="20">
+      <description summary="whether one display can be warmed, and whether it is">
+        Says whether a display's picture can be tinted towards a warmer colour
+        temperature, and whether it currently is.
+
+        supported is 1 when this display has a gamma ramp the compositor can
+        commit to. It is a much lower bar than HDR — no EDID claim is needed
+        and nothing is asked of the link — so almost every real connector
+        clears it. What does not is a session running nested inside another
+        compositor, which owns no CRTC and therefore no ramp; there the
+        setting can be remembered but never carried out, and a page that went
+        on offering it would be describing a display that does not exist.
+
+        active is what the compositor is actually doing, not what it was last
+        asked for. The two differ exactly when a request could not be carried
+        out, which is the case a shell must not present as success.
+
+        Nothing here says *why* the light is on: whether that is a schedule or
+        a switch is the shell's own business, since the schedule never left
+        it. See set_output_night_light.
+
+        Sent once per display when a version 20 object is bound, and again
+        whenever either value changes.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display"/>
+      <arg name="supported" type="uint" summary="1 when this display's picture can be warmed"/>
+      <arg name="active" type="uint" summary="1 when it currently is"/>
+    </event>
+
+    <event name="output_place" since="21">
+      <description summary="where one display stands in the layout">
+        Says which place a display holds in the row the compositor lays its
+        displays out in — 0 is the first one, which on a left-to-right layout is
+        the leftmost screen — and, by being sent at all, that this display's
+        place is the shell's to set.
+
+        The places reported are always 0 to n-1 over the displays reported,
+        with no gaps: they are positions in one list, not identities. A display
+        this compositor does not place is left out of that list entirely rather
+        than given a place it does not have — one pinned to a position by the
+        compositor's own config, which takes no part in the arrangement, and
+        every display on a session that mirrors them onto the same region,
+        where there is no order to be in. A shell listing what it is sent
+        therefore offers the setting exactly where it does something.
+
+        place is where the display actually is, not what was last asked for.
+        The two differ when a request could not be carried out, which is the
+        case a shell must not present as success.
+
+        Every display whose place changed is sent one, so a trade between two
+        of them arrives as two events. Sent once per display when a version 21
+        object is bound, and again whenever the arrangement changes — including
+        when a display is plugged in or unplugged, which renumbers the ones
+        that outlast it.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display"/>
+      <arg name="place" type="uint" summary="its place in the layout, counted from zero"/>
+    </event>
+
+    <enum name="mode_flag" bitfield="true" since="11">
+      <description summary="what is notable about one mode">
+        Two things a shell has to be able to say about a mode it is listing:
+        which one the display is running, and which one the display itself
+        asks for.
+      </description>
+      <entry name="current" value="1" summary="the display is being driven at this mode"/>
+      <entry name="preferred" value="2" summary="the display names this one as its own"/>
+    </enum>
+
+    <event name="output_mode" since="11">
+      <description summary="one mode a display can be driven at">
+        Describes one entry of a display's mode list. A batch of these ending
+        in output_modes_done replaces everything previously known about that
+        display, the way the overview's window list does.
+
+        The list is the connector's own, so it says what the hardware will
+        actually take rather than what a client would like. A backend with no
+        connectors — a nested session, whose size is its window's — reports no
+        modes at all, which is the truthful answer to "what else could this be
+        driven at" and not the same as reporting the one it is at.
+
+        refresh is in mHz, so a 59.94 Hz mode is 59940. It is 0 for a mode
+        with no meaningful rate, which a virtual output may have.
+
+        Sizes are the mode's own pixels, before scale and transform. Two
+        entries may share a size and differ only in refresh; both are real
+        choices, and a shell listing them should say which is which.
+
+        Sent once per display when a version 11 object is bound, and again
+        whenever the list or the current mode changes — including after a
+        set_output_mode, which is how a shell learns whether the change it
+        asked for happened.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display"/>
+      <arg name="width" type="uint" summary="mode width in pixels"/>
+      <arg name="height" type="uint" summary="mode height in pixels"/>
+      <arg name="refresh" type="uint" summary="refresh in mHz, 0 when there is none"/>
+      <arg name="flags" type="uint" enum="mode_flag" summary="whether this is the current or preferred mode"/>
+    </event>
+
+    <event name="window_captured" since="15">
+      <description summary="what came of a capture_window request">
+        Answers exactly one capture_window request, whether or not it worked.
+
+        path is where the file was written, which is the path that was asked
+        for. It is empty when nothing was written — the window had gone, it had
+        no pixels to read, or the file could not be created — and the reason is
+        in the compositor's log. A shell showing the user that a screenshot was
+        taken should show it when this arrives and not when it asked, because
+        until then it does not know.
+      </description>
+      <arg name="id" type="uint" summary="the window that was asked about"/>
+      <arg name="path" type="string" summary="the file that was written, empty when none was"/>
+    </event>
+
+    <event name="output_transform" since="16">
+      <description summary="how one display's picture is turned">
+        Says how a display's picture is currently turned, and by being sent at
+        all, that this display's orientation is the shell's to set.
+
+        wl_output.geometry carries a transform too, and it is not the same
+        statement. That one describes what a client should do about the output
+        it is drawing on, and a compositor may advertise it for a display whose
+        orientation it does not own — a nested session, whose window is turned
+        by the compositor above it, or a backend whose output carries a
+        transform of its own to compensate for how it draws. This event is sent
+        only for displays this compositor turns itself, so a shell listing them
+        offers the setting exactly where it does something.
+
+        transform is what the compositor is actually drawing at, not what it
+        was last asked for. They differ when a request could not be carried
+        out, which is the case a shell must not present as success.
+
+        Sent once per display when a version 16 object is bound, and again
+        whenever it changes.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display"/>
+      <arg name="transform" type="uint" enum="transform" summary="how its picture is turned"/>
+    </event>
+
+    <event name="output_modes_done" since="11">
+      <description summary="the mode list for a display is complete">
+        Ends a batch of output_mode events. The batch is the whole truth for
+        that display: a done event with no modes before it means this display
+        has no mode list to offer.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display"/>
+    </event>
+
+    <event name="screenshot" since="17">
+      <description summary="the screenshot binding was activated">
+        Sent when the user pressed the compositor's screenshot binding, naming
+        the display they were on. The shell is expected to answer with a
+        capture_output request for that display.
+
+        Routed by the compositor for the reason the guide and keyboard events
+        are: a fullscreen application holds the keyboard, and a screenshot key
+        that only worked while the shell had focus would be one that never
+        worked over the game somebody wanted a picture of.
+
+        The compositor asks rather than simply taking the picture itself
+        because the two halves of a screenshot live in different processes.
+        Only the compositor has the pixels, and only the shell knows where a
+        user's pictures go — which folder the desktop records for them, in the
+        language the account was made in, and what the file should be called.
+        So the binding comes here and the path goes back.
+
+        The display named is the one the user is driving, which is where the
+        keyboard that pressed the binding is. A shell may photograph a
+        different one, or every one; nothing here obliges it to take the
+        picture at all.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display the binding was pressed on"/>
+    </event>
+
+    <event name="share_request" since="18">
+      <description summary="an application is asking to see a display">
+        Sent to every client bound to this interface except the one that asked,
+        which in a running session means the shell. It is expected to put the
+        question to the user and answer with answer_share.
+
+        A shell that does not answer leaves the application waiting, which the
+        portal treats as a refusal after a while. That is the safe way round:
+        an unanswered question is not a yes.
+      </description>
+      <arg name="id" type="uint" summary="the question, to be quoted back"/>
+      <arg name="app_id" type="string" summary="what the application asking calls itself, possibly empty"/>
+    </event>
+
+    <event name="share_answered" since="18">
+      <description summary="what came of an ask_to_share request">
+        Answers exactly one ask_to_share, whether the user said yes or no.
+
+        output is the display the application may see, resolved to this
+        client's own wl_output. It is absent when the user refused, when
+        nobody could be asked, or when the display was unplugged between the
+        question and the answer — all of which the client must treat the same
+        way, because they all mean it may not record anything.
+      </description>
+      <arg name="id" type="uint" summary="the question that was asked"/>
+      <arg name="output" type="object" interface="wl_output" allow-null="true"
+           summary="the display that may be shared, or nothing"/>
+    </event>
+
+    <event name="output_captured" since="17">
+      <description summary="what came of a capture_output request">
+        Answers exactly one capture_output request, whether or not it worked,
+        on the same terms as window_captured: path is the file that was
+        written, and is empty when nothing was.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display that was asked about"/>
+      <arg name="path" type="string" summary="the file that was written, empty when none was"/>
+    </event>
+
+    <event name="screen_is_black" since="26">
+      <description summary="the curtain is down on every display">
+        Answers cover_in_black: every display the compositor is driving has put
+        a frame on screen with the black fully drawn over it.
+
+        It is sent once per curtain, and only on the way down. A client asking
+        for the black because it is about to end the session waits for this
+        before it does — that is the whole point of the request, and it is the
+        one moment at which nothing that happens next can be seen.
+
+        A display the compositor cannot draw on — one that is off, or has been
+        unplugged — takes no part: it is showing nothing already. With no
+        display left at all the event follows the fade immediately, because a
+        session with nothing to black out has nothing to wait for.
+      </description>
+    </event>
+
+    <event name="output_in_use" since="27">
+      <description summary="an application is in front of this display">
+        Whether what is in front of this display is an application — anything
+        the user opened, whatever started it — rather than the shell being the
+        whole of what is on the screen. A display showing nothing but the start
+        screen is 0. A game, a film, a browser, an emulator and Valve's own
+        storefront are all 1: the shell has no business ranking what somebody
+        chose to open, and every one of them is a picture somebody is looking
+        at.
+
+        Whether there is such a window there at all is a question only this
+        side can answer. The shell is told what the window in front of each
+        display calls itself, and that is exactly what cannot be relied on: an
+        application reaches the screen as steam_app_..., as its own name, or as
+        nothing at all, and an empty name is both "no window" and "a window
+        that never said".
+
+        Sent when the answer changes, per display, and on binding. A shell that
+        never asks about it can ignore it entirely; what it is for is the rule
+        that rests the *other* screens while somebody is using one of them.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display"/>
+      <arg name="in_use" type="uint" summary="1 while an application is in front of this display"/>
+    </event>
+
+    <event name="output_drawing" since="27">
+      <description summary="something on this display is still painting">
+        Whether any application on this display has put a new frame up recently.
+        A film playing on the second screen keeps this at 1; the same film
+        paused, a page nobody is scrolling, and a display with no application on
+        it at all are all 0.
+
+        The shell cannot answer this for itself. It is told which windows are on
+        which display, and it is told what they are called, but a window that
+        has stopped drawing looks exactly like one that has not from the other
+        side of the compositor — the frames go from the client to us.
+
+        It is what tells a screen that can be rested from one that is being
+        watched. A still picture is the thing an OLED panel is damaged by and
+        the thing nobody minds losing; a moving one is neither.
+
+        Recently means the last few seconds, which is deliberately long enough
+        that a film dropping frames is still drawing and short enough that a
+        paused one has stopped. Sent when the answer changes, per display, and
+        on binding.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display"/>
+      <arg name="drawing" type="uint" summary="1 while something on it is still painting"/>
+    </event>
+
+    <event name="output_pointer" since="27">
+      <description summary="the pointer is moving over this display">
+        Sent while the pointer is being moved, naming the display it is over.
+
+        The shell sees the pointer only where its own surfaces are in front, and
+        that is precisely not where this matters: over an application, and over
+        a display whose picture the shell has asked to have taken away, the
+        movement is delivered somewhere else or to nobody. So the compositor
+        names the display, exactly as output_pressed names the one a press
+        landed on.
+
+        Throttled rather than streamed: it is sent the moment the pointer
+        arrives on a different display, and after that at most once every two
+        seconds for as long as it goes on moving. A pointer standing still sends
+        nothing at all. That is enough for a shell timing out a display it has
+        left alone, and it is a long way short of a motion event.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display the pointer is over"/>
+    </event>
+
+    <event name="pip_menu" since="30">
+      <description summary="the user asked for the floating window's menu">
+        Sent when the user presses the right button on the floating window a
+        set_picture_in_picture is about. The shell is expected to raise its
+        context menu over that rectangle and to send back whatever is chosen —
+        pip_menu_command for the rows only a compositor can carry out, and
+        move_window_to_output for the two that move the window between
+        displays, which is what that request already means for every other
+        window.
+
+        The compositor routes this itself for the same reason it routes the
+        guide binding: the shell has no pointer focus over an application, and
+        this window is drawn in front of one. It is not offered a press it
+        cannot see.
+
+        The rectangle is the whole window as the user sees it — the surround
+        included, since that is what the pointer is over — in the display's own
+        logical coordinates, so a shell can hand it straight to whatever it
+        grows a menu out of.
+
+        A shell that answers nothing has answered "cancel", which is what the
+        row of that name does: nothing is held open on this side while the menu
+        is up, and the press has already been withheld from the window's own
+        client.
+      </description>
+      <arg name="id" type="uint" summary="the window, named as output_window names one"/>
+      <arg name="output" type="object" interface="wl_output" summary="the display it is on"/>
+      <arg name="x" type="int" summary="where it is on that display"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int" summary="how large it is drawn, surround included"/>
+      <arg name="height" type="int"/>
+    </event>
+
+    <event name="pip_window" since="31">
+      <description summary="one floating window on a display">
+        Describes one window a set_picture_in_picture is floating, so that a
+        shell with no pointer can offer the user something to do to it. Windows
+        are listed topmost first, and the batch ends with pip_windows_done.
+
+        This is the one thing set_picture_in_picture says such a window is *not*
+        listed as: it is still not something to switch to or to close, and it is
+        still absent from output_window and from the cards drawn out of it. What
+        this is for is the window itself — where it is, so a menu can be grown
+        out of it and the user can be shown which of two videos they are about
+        to move.
+
+        The rectangle is the whole window as the user sees it, surround
+        included, in the display's own logical coordinates: the same rectangle
+        pip_menu carries, and for the same reason.
+
+        Sent once per display when a version 31 object is bound, and again
+        whenever a window starts or stops floating or one of them moves — which,
+        while somebody is dragging one, is every frame.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display"/>
+      <arg name="id" type="uint" summary="stable handle, named as output_window names one"/>
+      <arg name="x" type="int" summary="where it is on that display"/>
+      <arg name="y" type="int"/>
+      <arg name="width" type="int" summary="how large it is drawn, surround included"/>
+      <arg name="height" type="int"/>
+    </event>
+
+    <request name="ask_for_the_picture_behind" since="33">
+      <description summary="hand over a buffer for what is drawn behind the shell">
+        Asks the compositor to draw, into `buffer`, what it is compositing on
+        this display behind the shell's own surfaces — and to say when it has.
+
+        The shell draws glass, and glass shows what is behind it. Everything the
+        shell itself draws it can read back from its own frame, and the
+        wallpaper it can evaluate, because it is the same function that paints
+        it. What it can neither read nor evaluate is another client: a game, or
+        the video in a floating window. Without this a pane standing over one of
+        those reproduces the wallpaper instead — a picture that is not there.
+
+        `layer` says which side of the shell's own surfaces to draw. `below` is
+        everything between the wallpaper and the surface the shell draws its
+        session on: the application windows. `above` is everything the
+        compositor draws in *front* of that surface and behind the context menu:
+        the windows set_picture_in_picture floats. The two are separate because
+        the shell has to put its own frame between them, and it draws that at
+        full resolution.
+
+        The picture is the compositor's own elements, scaled down to the size of
+        the buffer, on transparent: a pane composites it over the wallpaper it
+        evaluates itself, so what nothing covers must arrive covering nothing.
+        Small is expected and is the point — a pane frosts what it transmits, so
+        what it wants is a blurred picture, and a small one read back per frame
+        is cheaper than a large one. The compositor scales to whatever size the
+        buffer is.
+
+        One buffer is one picture. The compositor fills it, sends
+        the_picture_behind, and then leaves it alone until it is handed another
+        — so a shell that stops asking stops being charged for the readback, and
+        a shell that wants one per frame asks once per frame. Nothing is drawn
+        for a display no buffer is pending on.
+
+        The buffer must be wl_shm, ABGR8888 or XBGR8888 — the order a renderer
+        reads a picture back in, so that a copy is all there is between the two.
+        A buffer of a size the
+        compositor cannot use is answered with the_picture_behind carrying a
+        width and height of zero rather than an error: a picture is an
+        improvement to a pane, never a reason to end a session over.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display"/>
+      <arg name="layer" type="uint" enum="behind_layer" summary="which side of the shell's own surfaces"/>
+      <arg name="buffer" type="object" interface="wl_buffer" summary="where to draw it"/>
+    </request>
+
+    <enum name="behind_layer" since="33">
+      <description summary="which side of the shell's own surfaces a picture is of"/>
+      <entry name="below" value="0" summary="the application windows, between the wallpaper and the shell"/>
+      <entry name="above" value="1" summary="the floating windows, in front of the shell"/>
+    </enum>
+
+    <event name="pip_windows_done" since="31">
+      <description summary="the floating window list for a display is complete">
+        Ends a batch of pip_window events. The batch is the whole truth for that
+        display: a done event with no windows before it means nothing is
+        floating there.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display"/>
+    </event>
+
+    <event name="the_picture_behind" since="33">
+      <description summary="the buffer holds what is drawn behind the shell">
+        The buffer handed over by ask_for_the_picture_behind now holds the
+        picture, and the compositor has finished with it. The shell may read it,
+        and must ask again for the next one.
+
+        A width and height of zero means there was nothing to draw, or nothing
+        that could be: the display has no application on it, or the buffer was
+        not one the compositor could use. The shell should treat that as an
+        empty picture rather than as a stale one, or a pane goes on refracting a
+        game that has closed.
+      </description>
+      <arg name="output" type="object" interface="wl_output" summary="the display"/>
+      <arg name="layer" type="uint" enum="behind_layer" summary="which picture this is"/>
+      <arg name="width" type="int" summary="how much of the buffer was drawn into"/>
+      <arg name="height" type="int"/>
+    </event>
+
+    <request name="set_window_floating" since="34">
+      <description summary="make a window float in a corner, or stop it floating">
+        Says of one window what set_picture_in_picture says of the session: that
+        it floats. It is the same answer the window's title gives by itself —
+        see set_picture_in_picture, which is where what floating *is* is written
+        down — taken out of the compositor's hands for this one window and given
+        to the user.
+
+        Both directions, because they are one sentence. A video in a corner that
+        the user wants to watch properly is told zero: it stops floating, and is
+        laid out, listed, focused and closed exactly as every other window on
+        the session is — which on this shell means filling the display it is on.
+        An application the user wants out of the way while they do something
+        else is told one: it is taken out of that layout and given the corner,
+        the size and the surround a browser's picture-in-picture window gets,
+        whatever it calls itself. A second request naming only one of the two
+        would be one place for the other to be got wrong.
+
+        What is said here outranks the title from then on, and outlasts the
+        window ceasing to be called Picture-in-Picture: the user has said what
+        they want this window to be, and a browser retitling it is not them
+        changing their mind. It is remembered against the window and dies with
+        it.
+
+        Refused, with nothing done, while set_picture_in_picture has the feature
+        switched off: a session that does not want floating windows must not be
+        given one from a menu, and one put in a corner there would be a window
+        with no corner to be got out of.
+
+        Also refused for a window whose geometry is its client's own business —
+        an X11 menu, notification, splash or override-redirect window — which is
+        the one kind that can never be given a corner. Silently, as a request
+        naming a window that is gone is: a menu row is a thing the user pressed,
+        not a protocol error.
+
+        How the change is drawn is the compositor's. This one grows the window
+        out of its corner to fill the display, the same flight a window makes
+        when it is restored from a tile, and lets one arriving in a corner
+        arrive the way any floating window does.
+      </description>
+      <arg name="id" type="uint" summary="the window, from output_window or pip_window"/>
+      <arg name="floating" type="uint" summary="1 to float it in a corner, 0 to lay it out like every other window"/>
+    </request>
+
+    <enum name="picking" since="35">
+      <description summary="what an application is asking the user to choose"/>
+      <entry name="one_file" value="0" summary="one file that is already there"/>
+      <entry name="many_files" value="1" summary="any number of files that are already there"/>
+      <entry name="a_folder" value="2" summary="a folder, whatever is in it"/>
+      <entry name="a_new_file" value="3" summary="a folder and a name to write into it"/>
+    </enum>
+
+    <enum name="matching" since="35">
+      <description summary="how a pattern offered with offer_kind is read"/>
+      <entry name="glob" value="0" summary="a shell pattern matched against the file name"/>
+      <entry name="mime" value="1" summary="a media type matched against what the file is"/>
+    </enum>
+
+    <request name="offer_kind" since="35">
+      <description summary="one kind of file the question coming next will accept">
+        Names one pattern of one kind, for the ask_to_pick_files that follows it.
+        Sent as many times as there are patterns, which is how an application
+        that accepts "Images" made of *.png, *.jpg and *.webp says so.
+
+        Patterns sharing a name are one kind. The order is the order the
+        application gave, and the first kind named is the one the question opens
+        on, exactly as it is in every other desktop's chooser — an application
+        that put "Images" first meant the user to see images.
+
+        It carries the same id as the ask_to_pick_files it belongs to, and it
+        must come before it: a kind offered afterwards has arrived after the
+        question was put on screen and is ignored. Nothing accumulates in the
+        compositor — each of these is carried straight to the shell as a
+        pick_kind event, in the order it was sent, and it is the shell that
+        gathers them against the question they name.
+
+        Offering no kind at all is an application that will take any file, which
+        is the common case and is not a mistake.
+      </description>
+      <arg name="id" type="uint" summary="the question this kind belongs to"/>
+      <arg name="name" type="string" summary="what the kind is called, as the application spelled it"/>
+      <arg name="pattern" type="string" summary="the pattern itself, read as matching says"/>
+      <arg name="matching" type="uint" enum="matching" summary="how the pattern is read"/>
+    </request>
+
+    <request name="ask_to_pick_files" since="35">
+      <description summary="ask the user to choose a file, some files, or a folder">
+        Puts a file question to the session shell: this application wants a file
+        chosen, and here is what it will take. The answer comes back as
+        pick_answered, always, so a portal waiting on it is never left waiting.
+
+        Sent by the session's desktop portal for the same reason ask_to_share is
+        and along the same road, and it is worth reading that request first: the
+        portal cannot draw, only the shell can, and only the compositor can
+        reach the shell while a fullscreen application holds the screen.
+
+        id is the asking client's own number for this question, unique among the
+        questions it currently has outstanding, and is quoted back in the answer.
+        app_id is what the application asking calls itself, for the shell to name
+        in the question; it may be empty, and a shell should then say so rather
+        than showing an empty name.
+
+        title is what the application called the question — "Open Image", "Select
+        a folder" — and may be empty, in which case the shell says what the
+        purpose is in its own words. accept is the word the application wants on
+        the row that answers, and may likewise be empty. Neither is trusted for
+        anything but its own line of text.
+
+        name is what a new file is called to begin with, and means nothing for
+        any purpose but a_new_file. at is an absolute path the question should
+        open in, and may be empty; a shell may ignore it, and must ignore one
+        that is not a directory it can list — an application does not get to
+        decide what the user is looking at.
+
+        The question goes to every other client bound to this interface, and
+        never back to the one that asked, on exactly the terms ask_to_share's
+        does. Refused outright when nobody can be asked, for the same reason:
+        a file handed over without anybody being asked is the thing this request
+        exists to prevent.
+      </description>
+      <arg name="id" type="uint" summary="the asking client's number for this question"/>
+      <arg name="app_id" type="string" summary="what the application asking calls itself"/>
+      <arg name="purpose" type="uint" enum="picking" summary="what is being chosen"/>
+      <arg name="title" type="string" summary="what the application called the question, possibly empty"/>
+      <arg name="accept" type="string" summary="the word the application wants on the answering row, possibly empty"/>
+      <arg name="name" type="string" summary="what a new file is called to begin with, possibly empty"/>
+      <arg name="at" type="string" summary="an absolute directory to open in, possibly empty"/>
+    </request>
+
+    <request name="chose_file" since="35">
+      <description summary="one of the files the user chose">
+        Names one file the user picked, for the answer_pick that follows it.
+        Sent as many times as the user chose things, which for every purpose but
+        many_files is once.
+
+        The path is absolute. For a_new_file it is a file that need not exist
+        yet, and its parent directory is a folder the user walked to; for every
+        other purpose it is something that was on the disk when it was pressed.
+
+        It carries the same id as the answer_pick it belongs to and must come
+        before it, on the same terms offer_kind must come before the question.
+        A file named for a question nobody asked, or for one already answered,
+        is ignored.
+      </description>
+      <arg name="id" type="uint" summary="the question being answered"/>
+      <arg name="path" type="string" summary="absolute path of the file the user chose"/>
+    </request>
+
+    <request name="answer_pick" since="35">
+      <description summary="answer a pick_request">
+        The end of one file question, whether or not the user chose anything.
+        Whatever chose_file named for this id is the answer; an answer_pick with
+        nothing before it is the user saying no, which is what closing the
+        question without picking means and what a shell that cannot show the
+        question sends straight back.
+
+        kind is which of the offered kinds was in force when the user answered,
+        numbered from zero in the order they were offered, so that an application
+        that asked for "Images or Films" is told which of the two it is being
+        given. It is 0xffffffff when no kind was offered, or when the user was
+        looking at everything on the disk rather than at one of them.
+
+        Answering a question nobody asked, or one that has already been
+        answered, is ignored — a client that has gone away takes its question
+        with it.
+      </description>
+      <arg name="id" type="uint" summary="the question, from pick_request"/>
+      <arg name="kind" type="uint" summary="which offered kind was in force, or 0xffffffff for none"/>
+    </request>
+
+    <event name="pick_kind" since="35">
+      <description summary="one kind of file the question coming next will accept">
+        Carries one offer_kind through to the shell, unchanged and in the order
+        it was sent. Every one of these that names a question arrives before the
+        pick_request for it, so a shell gathers them against the id and takes
+        them when the question itself lands.
+
+        A shell that is holding kinds for an id that never asks should let them
+        go: the client that offered them has gone away, or changed its mind.
+      </description>
+      <arg name="id" type="uint" summary="the question this kind belongs to"/>
+      <arg name="name" type="string" summary="what the kind is called"/>
+      <arg name="pattern" type="string" summary="the pattern itself, read as matching says"/>
+      <arg name="matching" type="uint" enum="matching" summary="how the pattern is read"/>
+    </event>
+
+    <event name="pick_request" since="35">
+      <description summary="an application is asking for a file to be chosen">
+        Sent to every client bound to this interface except the one that asked,
+        which in a running session means the shell. It is expected to put the
+        question to the user and answer with answer_pick.
+
+        The arguments are ask_to_pick_files's own, and everything said there
+        about what they may and may not be trusted for holds here. A shell that
+        does not answer leaves the application waiting, which the portal treats
+        as a refusal after a while — the safe way round, exactly as it is for a
+        share_request.
+      </description>
+      <arg name="id" type="uint" summary="the question, to be quoted back"/>
+      <arg name="app_id" type="string" summary="what the application asking calls itself, possibly empty"/>
+      <arg name="purpose" type="uint" enum="picking" summary="what is being chosen"/>
+      <arg name="title" type="string" summary="what the application called the question, possibly empty"/>
+      <arg name="accept" type="string" summary="the word the application wants on the answering row, possibly empty"/>
+      <arg name="name" type="string" summary="what a new file is called to begin with, possibly empty"/>
+      <arg name="at" type="string" summary="an absolute directory to open in, possibly empty"/>
+    </event>
+
+    <event name="pick_chosen" since="35">
+      <description summary="one of the files the user chose">
+        Carries one chose_file through to whoever asked, unchanged and in the
+        order the shell sent it. Every one of these arrives before the
+        pick_answered that ends the question.
+
+        The path is on the machine the compositor is running on, and is the
+        shell's word for what the user pressed. Nothing here opens it or checks
+        that it is there: a file can be deleted between the press and the
+        answer, and the application is the one that has to cope with that
+        anyway.
+      </description>
+      <arg name="id" type="uint" summary="the question being answered"/>
+      <arg name="path" type="string" summary="absolute path of the file the user chose"/>
+    </event>
+
+    <event name="pick_answered" since="35">
+      <description summary="what came of an ask_to_pick_files request">
+        Answers exactly one ask_to_pick_files, whether the user chose something
+        or nothing.
+
+        Whatever pick_chosen named for this id is the answer. None at all is the
+        user saying no, and so is this event arriving because there was nobody to
+        ask, because the shell went away mid-question, or because the question
+        stood unanswered — all of which a client must treat the same way, since
+        they all mean it has been given no file.
+
+        kind is which of the offered kinds was in force, numbered from zero in
+        the order they were offered, or 0xffffffff for none.
+      </description>
+      <arg name="id" type="uint" summary="the question that was asked"/>
+      <arg name="kind" type="uint" summary="which offered kind was in force, or 0xffffffff for none"/>
+    </event>
+
+    <enum name="switch_direction" since="36">
+      <description summary="which way along the session's applications">
+        A display's windows are listed to the shell in the order they are
+        stacked, the one in front first, so forward is towards the window
+        behind the one on screen — which is what a hand that presses this once
+        is asking for, and what every desktop has meant by it for thirty years.
+      </description>
+      <entry name="forward" value="0" summary="the next application along"/>
+      <entry name="back" value="1" summary="the one before it"/>
+    </enum>
+
+    <event name="switch_window" since="36">
+      <description summary="the user is walking the session's applications">
+        Sent when the user pressed the compositor's switch binding — Alt+Tab,
+        and Alt+Shift+Tab the other way — with the modifier still held down.
+        The shell is expected to show its overlay with the window deck in
+        front, and to step the highlight one card in the direction given.
+
+        Routed by the compositor for the reason the guide, keyboard and volume
+        events are, and here it is not merely that the application holds the
+        keyboard: the application holding it is the one being switched away
+        from. A switcher that only worked while the shell had focus would be a
+        switcher for a session with nothing to switch between.
+
+        One event per press. The compositor does not repeat a held binding, so
+        a thumb left on Tab steps one card rather than thirty.
+
+        Nothing is switched by this. It says where the user has got to; what
+        they land on is taken when switch_done arrives.
+      </description>
+      <arg name="direction" type="uint" enum="switch_direction" summary="which way to step"/>
+    </event>
+
+    <event name="keyboard_layout" since="38">
+      <description summary="what the keyboard is set to">
+        Sent once when the shell binds, and again whenever the seat's keymap is
+        changed by anything — including by the shell's own
+        set_keyboard_layout, so that a request the compositor refused is not
+        left showing as though it had been carried out.
+
+        This exists because the shell cannot find the answer out. What a
+        session starts at is the compositor's own configuration file, which no
+        other process in the session has opened, and a settings page that could
+        not say what was in force would have nothing to mark on the first
+        machine it was ever opened on.
+
+        The two names are xkbcommon's, as set_keyboard_layout takes them.
+        variant is empty for a layout's own arrangement.
+      </description>
+      <arg name="layout" type="string" summary="xkb layout name, e.g. pl"/>
+      <arg name="variant" type="string"
+           summary="xkb variant name, empty for the layout's own arrangement"/>
+    </event>
+
+    <event name="switch_done" since="36">
+      <description summary="the modifier the walk was held under came up">
+        Sent when the user let go of the modifier. The shell is expected to
+        take whatever its highlight is on — that application coming back to the
+        front and taking the keyboard with it — and to put its overlay away.
+
+        Never sent without a switch_window before it: a modifier let go of by
+        somebody who never asked for the deck is not an answer to anything.
+
+        Nor is it sent where the walk was interrupted rather than finished —
+        the session losing the keyboard to another virtual terminal. Those keys
+        came up on the compositor's word rather than under the user's hand, and
+        a shell that took a card on them would be switching applications behind
+        somebody's back. The overlay is left standing instead, where every
+        other way of driving it still reaches it.
+      </description>
+    </event>
+
+    <event name="power_button" since="45">
+      <description summary="the machine's power button went down or came up">
+        Sent for the power button — KEY_POWER on whatever device reports it —
+        instead of handing it to the application that has the keyboard. It is
+        the machine's button, not a key of a program's, and a console decides
+        what it does itself: a press puts it to sleep, a longer hold asks what
+        to do.
+
+        Both edges are sent, so the shell can tell a press from a hold; a
+        compositor that never saw the button go down sends no release.
+
+        The login manager handles the button itself unless something holds a
+        handle-power-key inhibitor, and nothing here takes one. A shell that
+        wants this event to be the only thing a press does takes that
+        inhibitor itself, for as long as it is willing to answer the button.
+      </description>
+      <arg name="state" type="uint" enum="key_state"
+           summary="pressed or released"/>
+    </event>
+  </interface>
+</protocol>

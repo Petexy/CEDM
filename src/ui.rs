@@ -782,10 +782,26 @@ struct Metrics {
 
 impl Metrics {
     fn new(width: f32, height: f32) -> Self {
-        let scale = (width / REFERENCE_WIDTH)
-            .min(height / REFERENCE_HEIGHT)
-            .clamp(0.35, 2.5);
-        let compact = width < 760.0 || height < 520.0 || scale < 0.72;
+        // A display standing on its side is drawn against the same canvas
+        // turned on its side, 720×1280. Measured against the landscape one it
+        // is scaled by its width alone — a 1080×1920 panel came out at 0.84,
+        // everything on it drawn smaller than on the 1280×720 preview window
+        // while two thirds of the display stood empty — and the stacked layout
+        // it gets instead needs only the column's width across. See
+        // [`Layout::new`].
+        let (across, down) = if height > width {
+            (REFERENCE_HEIGHT, REFERENCE_WIDTH)
+        } else {
+            (REFERENCE_WIDTH, REFERENCE_HEIGHT)
+        };
+        let scale = (width / across).min(height / down).clamp(0.35, 2.5);
+        // Small by the canvas's own measure: its long side and its short one,
+        // which on a display standing on its side are its height and its
+        // width. Asked of the width, a 720×1280 panel — the turned canvas at a
+        // scale of exactly one — was drawn with the fixed sizes of a small
+        // screen.
+        let (long, short) = (width.max(height), width.min(height));
+        let compact = long < 760.0 || short < 520.0 || scale < 0.72;
         Self {
             width,
             height,
@@ -846,15 +862,16 @@ struct Layout {
     back: [f32; 4],
     clock: [f32; 4],
     date: [f32; 4],
-    /// Whether there is room beside the column for the clock.
+    /// Whether the clock is drawn: beside the column, or above it on a display
+    /// standing on its side, where the column is stacked under the hour.
     split: bool,
     /// Whether the on-screen keyboard has taken the bottom of the display.
     /// The footer goes first, because it is the row nearest the board and the
     /// one nothing in an answer depends on.
     footer_visible: bool,
     /// Whether the corner the legend is written in is a corner: there is
-    /// wallpaper beside the column to write on, and the on-screen keyboard has
-    /// not reached it. See [`Layout::new`].
+    /// wallpaper beside the column, or under a stacked one, to write on, and
+    /// the on-screen keyboard has not reached it. See [`Layout::new`].
     ///
     /// About the corner and **not** about the setting. Nothing in the column
     /// is measured against this row — it is not in the column — so the setting
@@ -865,8 +882,14 @@ struct Layout {
 
 impl Layout {
     fn new(metrics: Metrics, view: &View<'_>) -> Self {
-        let split = metrics.width >= SPLIT_WIDTH;
-        let column_w = if split {
+        // A display standing on its side has no room beside the column for the
+        // hour, so there the two are stacked instead: the hour and the day on
+        // the wallpaper at the top, the column the whole width of the display
+        // under them, and the row of hints in the corner under the column —
+        // the corner the shell writes its own row in.
+        let stacked = metrics.height > metrics.width;
+        let split = stacked || metrics.width >= SPLIT_WIDTH;
+        let column_w = if split && !stacked {
             // Both bounds are canvas lengths: they read as "no narrower than a
             // column that can hold the avatar and its two lines, no wider than
             // a comfortable measure", and neither of those is a count of
@@ -883,11 +906,47 @@ impl Layout {
         // runs past it — and because a rim hairline on a slab pinned to three
         // edges is a hairline the display has cut off on three sides.
         let float = PANEL_INSET * metrics.scale;
+
+        // The hour's size, which a stacked column is measured down from.
+        let clock_size = if metrics.compact {
+            64.0
+        } else {
+            (132.0 * metrics.scale).clamp(metrics.px(64.0), metrics.px(200.0))
+        };
+        let date_h = (clock_size * 0.24).max(18.0);
+
+        // The line the row of hints is written on. The legend stands in the
+        // bottom-right corner of the *wallpaper*, opposite the column, which is
+        // where `lxb-desktop` writes its own — and a stacked column stops short
+        // of it, which is what leaves that corner wallpaper.
+        //
+        // **Hugging its corner by the shell's own numbers, at the shell's own
+        // size** — see [`LEGEND_INSET`] and [`legend_scale`]. This row and the
+        // one the start screen draws a second later are the same row on the
+        // same wallpaper, so nothing about how it is drawn is this program's to
+        // choose. The middle of the row, and then the band around it: the shell
+        // writes it on `corner_line` measured up from the bottom of the display,
+        // and a button is drawn centred on that line.
+        let legend_scale = legend_scale(metrics.height);
+        let legend_h = LEGEND_GLYPH * legend_scale;
+        let legend_right = metrics.width - LEGEND_INSET * legend_scale;
+        let legend_middle = metrics.height
+            - (LEGEND_CORNER_TOP + LEGEND_CORNER_MARK * LEGEND_MARK_LINE) * legend_scale;
+        let legend_y = legend_middle - legend_h * 0.5;
+
+        // Stacked, the column starts under the day and stops above the row of
+        // hints; beside the hour it runs the height of the display.
+        let (column_top, column_bottom) = if stacked {
+            let day_ends = float + metrics.safe + clock_size * 1.22 + metrics.px(4.0) + date_h;
+            (day_ends + metrics.safe, legend_y - float)
+        } else {
+            (float, metrics.height - float)
+        };
         let column = [
             float,
-            float,
+            column_top,
             (column_w - float * 2.0).max(200.0),
-            (metrics.height - float * 2.0).max(200.0),
+            (column_bottom - column_top).max(200.0),
         ];
 
         let inset = if metrics.compact {
@@ -1001,8 +1060,11 @@ impl Layout {
         let block_h = left_h.max(right_h);
         // Centred in what is left of the column, but never above the way out:
         // an open keyboard shortens the column enough that the two would
-        // otherwise be laid over each other.
-        let block_top = ((usable_bottom - block_h) * 0.5).max(
+        // otherwise be laid over each other. Measured from the display's top
+        // where the column runs its height, and from the column's own where it
+        // stands under the hour.
+        let above = if stacked { column[1] } else { 0.0 };
+        let block_top = (above + (usable_bottom - above - block_h) * 0.5).max(
             back[1]
                 + back[3]
                 + if metrics.compact {
@@ -1067,42 +1129,28 @@ impl Layout {
             message_h,
         ];
 
-        let clock_w = (metrics.width - column_w).max(0.0);
-        let clock_x = column_w;
-        let clock_size = if metrics.compact {
-            64.0
+        // Beside the column, on the half of the display it does not cover and a
+        // little above that half's middle; stacked, across the top of the
+        // display over the column. The two things this screen puts on the
+        // wallpaper are then the hour and the row of buttons: one above the
+        // other beside the column, or one above it and one under it.
+        let clock = if stacked {
+            [0.0, float + metrics.safe, metrics.width, clock_size * 1.22]
         } else {
-            (132.0 * metrics.scale).clamp(metrics.px(64.0), metrics.px(200.0))
+            [
+                column_w,
+                metrics.height * 0.40 - clock_size * 0.62,
+                (metrics.width - column_w).max(0.0),
+                clock_size * 1.22,
+            ]
         };
-        let clock_y = metrics.height * 0.40 - clock_size * 0.62;
-        let clock = [clock_x, clock_y, clock_w, clock_size * 1.22];
         let date = [
-            clock_x,
+            clock[0],
             clock[1] + clock[3] + metrics.px(4.0),
-            clock_w,
-            (clock_size * 0.24).max(18.0),
+            clock[2],
+            date_h,
         ];
 
-        // The legend stands in the bottom-right corner of the *wallpaper*,
-        // opposite the column, which is where `lxb-desktop` writes its own. The
-        // two things this screen puts on the wallpaper are then the hour and
-        // the row of buttons, one above the other on the half of the display
-        // the column is not standing on.
-        //
-        // **Hugging its corner by the shell's own numbers, at the shell's own
-        // size** — see [`LEGEND_INSET`] and [`legend_scale`]. This row and the
-        // one the start screen draws a second later are the same row on the
-        // same wallpaper, so nothing about how it is drawn is this program's to
-        // choose.
-        let legend_scale = legend_scale(metrics.height);
-        let legend_h = LEGEND_GLYPH * legend_scale;
-        let legend_right = metrics.width - LEGEND_INSET * legend_scale;
-        // The middle of the row, and then the band around it: the shell writes
-        // it on `corner_line` measured up from the bottom of the display, and a
-        // button is drawn centred on that line.
-        let legend_middle = metrics.height
-            - (LEGEND_CORNER_TOP + LEGEND_CORNER_MARK * LEGEND_MARK_LINE) * legend_scale;
-        let legend_y = legend_middle - legend_h * 0.5;
         // How far left it may reach. The row is laid out from its right-hand
         // end leftwards and has to be told where to stop, and there are two
         // things on that side of the screen to stop at.
@@ -1116,8 +1164,13 @@ impl Layout {
         // row stands at full size while somebody types; on a 16:9 desktop panel
         // there is enough for a smaller one; on something smaller still there
         // is none, and [`build_legend`] writes nothing rather than printing
-        // over the keys.
-        let beside_the_column = column[0] + column[2] + float;
+        // over the keys. Under a stacked column there is no glass to stop at,
+        // and the row may reach as far as the inset it keeps from the right.
+        let beside_the_column = if stacked {
+            LEGEND_INSET * legend_scale
+        } else {
+            column[0] + column[2] + float
+        };
         let legend_left = match view.keyboard {
             Some(_) => {
                 let [board_x, board_y, board_w, board_h] =
@@ -3057,12 +3110,17 @@ mod tests {
     /// Every real display the greeter will be put on, as physical pixels —
     /// which is what `build` is handed, and the reason none of this showed up
     /// in the 1280×720 preview window, where the scale is exactly 1.
-    const DISPLAYS: [(f32, f32); 5] = [
+    const DISPLAYS: [(f32, f32); 8] = [
         (1280.0, 720.0),
         (1600.0, 900.0),
         (1920.0, 1080.0),
         (2560.0, 1440.0),
         (3840.0, 2160.0),
+        // And standing on their sides, where the hour is stacked over the
+        // column rather than set beside it.
+        (720.0, 1280.0),
+        (1080.0, 1920.0),
+        (2160.0, 3840.0),
     ];
 
     fn layout_at(width: f32, height: f32) -> Layout {
@@ -3138,6 +3196,12 @@ mod tests {
             // canvas is no longer tracked exactly; every display below that
             // has to match the reference composition.
             if Metrics::new(width, height).scale >= 2.5 {
+                continue;
+            }
+            // Standing on its side the column is the whole width by design,
+            // under the hour rather than beside it — see
+            // `a_display_standing_on_its_side_stacks_the_hour_over_the_column`.
+            if height > width {
                 continue;
             }
             let got = share(&layout_at(width, height), width);
@@ -3326,7 +3390,12 @@ mod tests {
                 ];
                 phases.extend(refusals.iter().map(|message| Phase::Error(message)));
 
-                for (width, height) in [(1280.0, 720.0), (1920.0, 1080.0), (3840.0, 2160.0)] {
+                for (width, height) in [
+                    (1280.0, 720.0),
+                    (1920.0, 1080.0),
+                    (3840.0, 2160.0),
+                    (1080.0, 1920.0),
+                ] {
                     for phase in &phases {
                         // Once with the board down and once with it up, because
                         // the caps are only in the scene while it is up.
@@ -3422,7 +3491,8 @@ mod tests {
                 ];
                 for weekday in 0..7 {
                     for phase in phases {
-                        for (width, height) in [(1280.0, 720.0), (3840.0, 2160.0)] {
+                        for (width, height) in [(1280.0, 720.0), (3840.0, 2160.0), (1080.0, 1920.0)]
+                        {
                             let mut view =
                                 view(&users, &sessions, phase, Focus::Prompt, FOOTER.as_slice());
                             view.now = Some(crate::clock::Now {
@@ -3819,6 +3889,10 @@ mod tests {
             (1920.0, 1080.0),
             (2560.0, 1440.0),
             (3840.0, 2160.0),
+            // Standing on their sides, where the hour is over the column.
+            (1080.0, 1920.0),
+            (720.0, 1280.0),
+            (2160.0, 3840.0),
         ] {
             let metrics = Metrics::new(width, height);
             let layout = Layout::new(
@@ -4083,6 +4157,10 @@ mod tests {
     /// The clock is the half of the design that has room to be dropped. A
     /// narrow display gives the whole width to the column instead of splitting
     /// it into two halves that are each too small to read.
+    ///
+    /// Narrow and wider than it is tall: a display standing on its side has all
+    /// the room it needs for the hour above the column, and is stacked instead —
+    /// see the test after this one.
     #[test]
     fn a_narrow_display_gives_the_whole_width_to_the_column_and_no_clock() {
         let users = [user("Alex")];
@@ -4106,8 +4184,8 @@ mod tests {
                 Focus::Users,
                 FOOTER.as_slice(),
             ),
-            720.0,
-            900.0,
+            860.0,
+            600.0,
         );
         let clock = crate::clock::Now::read()
             .expect("local time")
@@ -4130,6 +4208,126 @@ mod tests {
         let date = crate::clock::Now::read().expect("local time").date();
         assert!(wide.scene.texts.iter().any(|text| text.content == date));
         assert!(!narrow.scene.texts.iter().any(|text| text.content == date));
+    }
+
+    /// A display standing on its side has no room beside the column for the
+    /// hour and plenty above it, so there the two are stacked: the hour and the
+    /// day on the wallpaper at the top, the column the whole width of the
+    /// display under them and short of the row of hints, which is written in
+    /// the corner under it. And it is drawn against the canvas turned on its
+    /// side, so nothing in the column is drawn smaller because the display is
+    /// narrow.
+    #[test]
+    fn a_display_standing_on_its_side_stacks_the_hour_over_the_column() {
+        let users = [user("Alex")];
+        let sessions = [session("LineXinBar")];
+        let the_view = || {
+            view(
+                &users,
+                &sessions,
+                Phase::Choose,
+                Focus::Users,
+                FOOTER.as_slice(),
+            )
+        };
+        let letters = crate::clock::Now::read()
+            .expect("local time")
+            .time(crate::clock::Clock::default())
+            .chars()
+            .filter(|c| *c != visual::letters::SPACE)
+            .count();
+        for (width, height) in [
+            (1080.0, 1920.0),
+            (720.0, 1280.0),
+            (800.0, 1280.0),
+            (1440.0, 2560.0),
+        ] {
+            let metrics = Metrics::new(width, height);
+            let layout = Layout::new(metrics, &the_view());
+            let turned = (width / REFERENCE_HEIGHT).min(height / REFERENCE_WIDTH);
+            assert!(
+                (metrics.scale - turned).abs() < 1e-4,
+                "{width}x{height}: drawn at {} rather than {turned}",
+                metrics.scale
+            );
+            let float = PANEL_INSET * metrics.scale;
+            assert!((layout.column[0] - float).abs() < 0.01, "{width}x{height}");
+            assert!(
+                (layout.column[2] - (width - float * 2.0)).abs() < 0.01,
+                "{width}x{height}: the column is not the width of the display"
+            );
+            assert!(layout.split && layout.legend_room, "{width}x{height}");
+            assert!(layout.date[1] >= layout.clock[1] + layout.clock[3] - 0.01);
+            assert!(
+                layout.date[1] + layout.date[3] < layout.column[1],
+                "{width}x{height}: the day runs into the column"
+            );
+            assert!(
+                layout.column[1] + layout.column[3] < layout.legend_row[1],
+                "{width}x{height}: the column runs into the row of hints"
+            );
+            // Who is signing in, inside the glass rather than over its edge.
+            let [_, avatar_y, _, avatar_h] = layout.avatar;
+            assert!(avatar_y >= layout.column[1], "{width}x{height}");
+            assert!(
+                layout.footer_row[1] + layout.footer_row[3] <= layout.column[1] + layout.column[3],
+                "{width}x{height}"
+            );
+            assert!(
+                avatar_y + avatar_h <= layout.footer_row[1],
+                "{width}x{height}"
+            );
+            // And every letter of the time is drawn, with the day under it.
+            let drawn = one_display(the_view(), width, height);
+            assert_eq!(
+                clock_letters(&drawn.scene).len(),
+                letters,
+                "{width}x{height}"
+            );
+        }
+    }
+
+    /// Wider than it is tall, nothing about the column, the hour or the corner
+    /// has moved: the layout is the one it always was, which the numbers here
+    /// are copied from.
+    #[test]
+    fn a_landscape_display_is_laid_out_as_it_always_was() {
+        let users = [user("Alex")];
+        let sessions = [session("LineXinBar")];
+        let the_view = view(
+            &users,
+            &sessions,
+            Phase::Choose,
+            Focus::Users,
+            FOOTER.as_slice(),
+        );
+        for (width, height) in [
+            (1280.0, 720.0),
+            (1600.0, 900.0),
+            (1920.0, 1080.0),
+            (2560.0, 1440.0),
+            (1280.0, 1024.0),
+            (1024.0, 1024.0),
+        ] {
+            let metrics = Metrics::new(width, height);
+            let scale = (width / REFERENCE_WIDTH)
+                .min(height / REFERENCE_HEIGHT)
+                .clamp(0.35, 2.5);
+            assert_eq!(metrics.scale, scale, "{width}x{height}");
+            let layout = Layout::new(metrics, &the_view);
+            let float = PANEL_INSET * scale;
+            assert_eq!(layout.column[1], float, "{width}x{height}");
+            assert_eq!(layout.column[3], (height - float * 2.0).max(200.0));
+            let column_w = (width * COLUMN_SHARE).clamp(360.0 * scale, 620.0 * scale);
+            assert_eq!(layout.column[2], (column_w - float * 2.0).max(200.0));
+            assert_eq!(layout.clock[0], column_w, "{width}x{height}");
+            assert_eq!(layout.clock[2], width - column_w, "{width}x{height}");
+            assert_eq!(
+                layout.legend_row[0],
+                layout.column[0] + layout.column[2] + float,
+                "{width}x{height}"
+            );
+        }
     }
 
     /// Every action the administrator left on is reachable with a pointer, and
@@ -5083,6 +5281,27 @@ mod tests {
             let (shut, without) = raised(None);
             let keys = keyboard_panel_rect(width, height);
 
+            // Standing on its side the board is the width of the display, and
+            // there is no corner left beside it at all: the row gives up while
+            // it is up, rather than printing over the keys, and is back the
+            // moment it goes.
+            if height > width {
+                // No room is no row: `build_legend` draws nothing at all. (The
+                // board's own keys say Back and wear an Enter mark, so looking
+                // for the row's words over them would find the board.)
+                assert!(
+                    !open.legend_room,
+                    "{width}x{height}: a corner under the keys"
+                );
+                let _ = &with_board;
+                let (cells, words) = legend_in(&without, shut.legend_row);
+                assert!(
+                    shut.legend_room && !cells.is_empty() && !words.is_empty(),
+                    "{width}x{height}: the corner was left blank with the board down",
+                );
+                continue;
+            }
+
             // The corner is there either way, and the board only ever takes
             // room off its left-hand end.
             assert!(open.legend_room && shut.legend_room, "{width}x{height}");
@@ -5274,6 +5493,19 @@ mod tests {
                                 let output = one_display(one, width, height);
                                 let margin = layout.legend_row[0];
                                 let edge = layout.legend_row[0] + layout.legend_row[2];
+                                // Standing on its side, a board the width of
+                                // the display leaves no corner to write in, and
+                                // the row gives up rather than print over it.
+                                // No room is no row: `build_legend` draws
+                                // nothing at all.
+                                if raised.is_some() && height > width {
+                                    assert!(
+                                        !layout.legend_room,
+                                        "{}: a corner under the keys at {width}x{height}",
+                                        language.endonym(),
+                                    );
+                                    continue;
+                                }
                                 let (cells, words) = legend_in(&output, layout.legend_row);
                                 assert!(
                                     !cells.is_empty(),

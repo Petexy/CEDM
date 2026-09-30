@@ -351,7 +351,7 @@ pub struct Renderer {
     _window: Arc<Window>,
     _instance: wgpu::Instance,
     surface: wgpu::Surface<'static>,
-    _adapter: wgpu::Adapter,
+    adapter: wgpu::Adapter,
     device: wgpu::Device,
     queue: wgpu::Queue,
     config: wgpu::SurfaceConfiguration,
@@ -663,7 +663,7 @@ impl Renderer {
             _window: window,
             _instance: instance,
             surface,
-            _adapter: adapter,
+            adapter,
             device,
             queue,
             config,
@@ -691,6 +691,12 @@ impl Renderer {
         })
     }
 
+    /// Whether this screen is drawn on the processor rather than a graphics
+    /// chip — the machine low-end hardware mode is on by itself for.
+    pub fn software(&self) -> bool {
+        self.adapter.get_info().device_type == wgpu::DeviceType::Cpu
+    }
+
     pub fn size(&self) -> (u32, u32) {
         (self.config.width, self.config.height)
     }
@@ -712,7 +718,16 @@ impl Renderer {
         );
     }
 
-    pub fn render(&mut self, scene: &Scene, time: f32) -> anyhow::Result<()> {
+    /// Draw `scene` and put it on the display. `presenting` is called just
+    /// before the frame goes out, and only when one does — which is where a
+    /// request that has to travel with the frame, such as to be told when it
+    /// was shown, is made.
+    pub fn render(
+        &mut self,
+        scene: &Scene,
+        time: f32,
+        presenting: impl FnOnce(),
+    ) -> anyhow::Result<()> {
         let shown = theme::theme();
         self.queue.write_buffer(
             &self.globals_buffer,
@@ -876,6 +891,7 @@ impl Renderer {
             pass.draw(0..3, 0..1);
         }
         self.queue.submit(Some(encoder.finish()));
+        presenting();
         self.queue.present(frame);
         self.text_atlas.trim();
         Ok(())

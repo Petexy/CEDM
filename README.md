@@ -4,7 +4,7 @@
 and for ordinary Linux desktop sessions.**
 
 [![Licence](https://img.shields.io/badge/licence-GPL--3.0--only-blue)](LICENSE)
-[![Version](https://img.shields.io/badge/version-0.9.2-informational)](Cargo.toml)
+[![Version](https://img.shields.io/badge/version-0.9.3-informational)](Cargo.toml)
 [![Rust](https://img.shields.io/badge/rust-1.89%2B-orange)](Cargo.toml)
 
 ![The login screen](docs/screen.png)
@@ -98,6 +98,12 @@ cargo run -- --list-sessions
   machine's locale in.
 - **Four sounds**, which are LineXinBar's own, so signing in and using the
   shell that follows are one instrument. `sound = false` turns them off.
+- **It rests like the console it opens.** Left alone, the login screen dims,
+  goes dark and puts the machine to sleep on the machine's own power settings
+  — the ones LineXinBar's Settings > Power writes — and the power button does
+  what those say. On a machine that cannot keep up with the wallpaper it
+  draws itself the cheap way, as LineXinBar's low-end hardware mode does. See
+  [left alone](docs/architecture.md#left-alone).
 
 ![The on-screen keyboard](docs/keyboard.png)
 
@@ -176,9 +182,9 @@ cargo clippy --offline --all-targets -- -D warnings
 The suite includes an in-process fake greetd which checks the actual bytes on
 the wire, and two checks that a translation is not a string: every sentence of
 every language is shaped in the faces the greeter *ships*, into an empty font
-database, and every screen is laid out in every language from 1280×720 to 4K
-with each run measured against the box it was given. Unix-socket tests may need
-to run outside syscall-restricted build sandboxes.
+database, and every screen is laid out in every language from 1280×720 to 4K,
+and standing on its side, with each run measured against the box it was given.
+Unix-socket tests may need to run outside syscall-restricted build sandboxes.
 
 Previewing is deliberately separate from installing. A production milestone
 must additionally test authentication failure and retry, logout, session

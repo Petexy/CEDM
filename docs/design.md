@@ -299,6 +299,29 @@ What is still ahead of this is a *surface per output* rather than one surface
 cut up, which is what would let the column be drawn on every screen under an
 ordinary fullscreening compositor as well.
 
+## A display standing on its side
+
+A display taller than it is wide has no room beside the column for the hour,
+and plenty above it, so there the two are stacked: the hour and the day on the
+wallpaper across the top, the column the whole width of the display under them,
+and the row of what the buttons do in the corner under the column — the corner
+the shell writes its own row in. The column stops short of that row whether or
+not the row is shown, so the setting still moves nothing.
+
+It is drawn against the canvas turned on its side, 720×1280 rather than
+1280×720. Measured against the landscape one, a 1080×1920 panel was scaled by
+its width alone, to 0.84: everything in a column two fifths of the display wide
+was drawn smaller than on the preview window, while the rest of the display
+stood empty. What counts as a small screen is asked the same way, of the long
+side and the short one, so the turned canvas at a scale of exactly one is not
+drawn with a small screen's fixed sizes.
+
+The on-screen keyboard is the width of such a display, so while it is up there
+is no corner left beside it and the row gives up, as it does on any display the
+board leaves no room on. A display wider than it is tall is laid out exactly as
+it always was, which a test holds; one too narrow to split still gives the
+column the whole width and draws no clock.
+
 ## The motion
 
 - **Profile changes slide beneath a stationary selection light** and can be
@@ -368,7 +391,8 @@ than a wide one, so what is left beside it is a distance rather than a yes or a
 no: the row keeps as much of the corner as there is and is drawn smaller — never
 below eleven twentieths — before it gives up a pair, and the pair it gives up is
 the last. A display too narrow for the clock has no wallpaper beside the column
-at all, and carries no row, exactly as it carries no clock. An open session menu
+at all, and carries no row, exactly as it carries no clock; one standing on its
+side has the corner under the column instead. An open session menu
 takes the row away whole, as a context menu does in the shell.
 
 **It is off where the account turned it off.** `button-hints` is one key in

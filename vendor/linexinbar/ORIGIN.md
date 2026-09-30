@@ -8,9 +8,11 @@ The following files were copied from LineXinBar (<https://github.com/Petexy/Line
 | `src/offscreen.wgsl` | `crates/lxb-desktop/src/offscreen.wgsl` |
 | `src/visual/theme.rs` | `crates/lxb-desktop/src/theme.rs` |
 | `src/steam_hid.rs` | `crates/lxb-desktop/src/steam_hid.rs` |
+| `src/cadence.rs` | `crates/lxb-desktop/src/cadence.rs`, byte for byte, at commit `a4400d9` |
 | `assets/fonts/Roboto-*.ttf`, `assets/fonts/LICENSE.txt` | `font/Roboto/static/*` and `font/Roboto/LICENSE.txt` |
 | `assets/glyphs/*` | matching `icons/*.svg` files |
 | `assets/sounds/*` | matching `crates/lxb-desktop/src/sounds/*.ogg` files, at commit `0290f37` |
+| `protocols/lxb-shell-v1.xml` | `crates/lxb-protocol/protocols/lxb-shell-v1.xml`, version 45, at commit `6c556a3` |
 
 `third_party/lxb-gilrs` and `third_party/lxb-gilrs-core` are copies of LineXinBar's own `third_party/` trees of the same names (shell commit `c08e2cf`), byte for byte but their `README.LXB.md`. They are **not** under the terms above: they are GilRs, Apache-2.0 or MIT, with one fix LineXinBar made to its Linux hot-plug handling. The login screen reads its controllers through them so that the whole family reads pads through one GilRs, and the fixed one. See the `README.LXB.md` in each.
 
@@ -53,6 +55,17 @@ crate. So the enum and its table live in `src/accent.rs`, beside the reader that
 pulls the keys out of `shell.toml`, and this file refers to them — `THEMES` for
 the shell's `wallpaper::STYLES`, and `accent::style` for `wallpaper::style`.
 Anything else in the block is the shell's, verbatim.
+
+The low-end block beside it — `LOW_END`, `set_low_end`, and what `style` and
+`particles` do with it — is the shell's too, from commit `463f363`. Only one
+doc link differs: the shell's points at its settings module, which this program
+has not got, and this one points at the greeter's `Application::low_end`.
+
+The protocol's XML is copied whole so the generated code matches the
+compositor's, and three of its messages are all the login screen uses:
+`set_output_power`, the `display_power` enum it takes, and the `power_button`
+event. Copy it again when the compositor's version moves; `display_power.rs`
+binds exactly version 45, so a newer compositor still answers it.
 
 `Part` itself is *not* one of those substitutions. It is the shell's enum, copied
 whole, and `src/accent.rs` refers back to it here rather than keeping a second

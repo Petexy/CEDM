@@ -195,6 +195,67 @@ The fourth item is the route for an account the greeter cannot enumerate. It is
 not an administrator's to withdraw: on a machine whose accounts live in a
 directory it is the only way in.
 
+## Left alone
+
+A handheld switched on and put down spends its night on the login screen if
+nobody signs in, so the login screen dims, goes dark and asks the machine to
+sleep on the same waits the session keeps — [`src/idle.rs`](../src/idle.rs).
+They are LineXinBar's Settings > Power, which is **the machine's** setting and
+not an account's, and LineXinBar keeps it where a greeter can read it:
+`/etc/lxb/power.toml`, believed only when root owns it and read through the same
+door as everything else here. A machine with no file has LineXinBar's defaults:
+dim after two minutes, dark after five, sleep after a quarter of an hour on the
+battery and an hour plugged in. Whether the machine is on its battery is read
+out of `/sys/class/power_supply`, leaving out a mouse's or a pad's own.
+
+Anything this screen hears counts as somebody being there — a key, the pointer,
+a button on a controller — and the press that lights a dark screen does only
+that. Waking from sleep starts every wait over: the boot clock, which counts
+sleep, is compared with the monotonic one, which does not. Sleep is asked of
+`systemctl --no-ask-password` like the bottom row's, so whatever the system
+holds, logind refuses and the login screen asks again a minute later. A login
+screen inside another desktop (LineXinBar's compositor says which backend it
+draws through), a preview and a windowed run never ask.
+
+**How the displays are dimmed and switched off** is
+[`src/display_power.rs`](../src/display_power.rs): the greeter is its
+compositor's shell, and LineXinBar's compositor offers its shell
+`lxb_shell_v1`, whose `set_output_power` draws the dimming sheet or fades a
+display to black and switches it off at the connector — the session's own
+sheet and fades. The XML is LineXinBar's, copied into `protocols/`. While the
+screens are dark nothing is drawn and the loop wakes ten times a second, which
+took the login screen from about 5% of a processor core to about 0.1% on the
+desk this was written at. Under any other compositor the global is not there
+and the screen stays lit, as it always did.
+
+**The power button** is logind's: LineXinBar writes the machine's answer as
+`HandlePowerKey` (`/etc/systemd/logind.conf.d/60-lxb-power.conf`), so a press at
+the login screen sleeps, hibernates or turns the machine off as the session's
+would. The one answer logind has no word for, **Power menu**, the login screen
+gives itself: the compositor sends the button to its shell as
+`lxb_shell_v1.power_button`, and the focus moves to the bottom row's power
+buttons.
+
+## Low-end hardware mode
+
+LineXinBar's Settings > System > Low-end hardware mode is for a machine that
+cannot keep up with the water, and the login screen is the first thing such a
+machine draws. It is on here where the last account to sign in published it
+(`low-end-mode` in its look) and, where it chose nothing, whenever this screen
+is drawn on the processor rather than a graphics chip. It holds the wallpaper
+on one moment (LineXinBar's own, so the session that follows stands on the
+same picture), draws the plain material without sparkles, and draws a frame
+once a second while nothing moves. While something moves it draws each frame
+as the display shows the last one, which is the display's own refresh; a
+device that misses more than a fifth of them is drawn at every other refresh
+instead, on the display's beat, and is given the full rate back once it has
+shown for long enough that it can. That pace is `src/cadence.rs`, LineXinBar's
+own (see `vendor/linexinbar/ORIGIN.md`): each frame asks, with
+`pre_present_notify`, to be told when it has been shown, and the redraw asked
+for as it goes out arrives with that answer. The lit control's pulse runs on
+the wallpaper's clock, so it holds still too. On llvmpipe that took a still
+login screen from about seven processor cores to a quarter of one.
+
 ## The udev rule
 
 The udev rule the package installs is the only thing any of this grants. The
