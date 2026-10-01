@@ -1,10 +1,12 @@
 # The second-generation Steam Controller, made readable to the login screen.
 #
-# That pad has no kernel gamepad driver: `hid-steam` claims the older
-# controllers and the Deck, so this one falls through to `hid-generic` and never
-# grows a joystick node. CEDM therefore reads its input report straight from
-# hidraw — see src/steam_hid.rs for why that is the only source that survives
-# both lizard mode and Steam having claimed the pad.
+# Before Linux 7.3 that pad has no kernel gamepad driver: `hid-steam` claims the
+# older controllers and the Deck, so this one falls through to `hid-generic` and
+# never grows a joystick node. From 7.3, and earlier on handheld kernels,
+# `hid-steam` drives it as it does the Deck, with a gamepad that stays silent in
+# lizard mode. CEDM reads its input report straight from hidraw either way —
+# see src/steam_hid.rs for why that is the only source that survives both
+# lizard mode and Steam having claimed the pad.
 #
 # hidraw nodes are 0600 root:root by default, and nothing in systemd's own
 # uaccess rules tags them, so without this file the one controller the greeter

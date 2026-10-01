@@ -367,6 +367,19 @@ impl Sounds {
         }
     }
 
+    /// Let go of an output that has failed, now rather than at the next press.
+    ///
+    /// Called every time the login screen wakes. A dead stream is not a quiet
+    /// one: cpal's output thread goes on polling it, is answered at once with
+    /// the same error, and polls again — a core kept busy, for as long as the
+    /// stream is held, on a login screen nobody may touch for an hour. Dropping
+    /// it is what stops that thread; the next sound opens the device again.
+    pub fn settle(&mut self) {
+        if self.device.is_some() && self.device_failed.load(Ordering::Acquire) {
+            self.refresh_failed_output(Instant::now());
+        }
+    }
+
     /// Consume the audio thread's signal before using its mixer again.
     fn refresh_failed_output(&mut self, now: Instant) {
         if self.device_failed.swap(false, Ordering::AcqRel) {
@@ -644,19 +657,42 @@ fn open_output(want: &Want, device_failed: Arc<AtomicBool>) -> Result<Output, De
 ///
 /// Underruns are glitches the stream itself can survive. A vanished device or
 /// invalid configuration cannot recover in place; those are the two errors
-/// rodio documents as requiring the stream to be destroyed and rebuilt.
+/// rodio documents as requiring the stream to be destroyed and rebuilt — and
+/// there is a third, which rodio does not name: see [`needs_reopen`].
+///
+/// A stream that cannot recover says so once. cpal's output thread reports the
+/// same failure every time it wakes, and for a stream that has died that is
+/// continuously: after a Steam Deck resumed at the login screen, this line was
+/// written 29,985 times in 56 seconds, which is as many as the journal would
+/// take before it started throwing them away.
 fn output_error_callback(
     device_failed: Arc<AtomicBool>,
 ) -> impl FnMut(StreamError) + Clone + Send + 'static {
     move |err| {
-        let needs_reopen = matches!(
-            err,
-            StreamError::DeviceNotAvailable | StreamError::StreamInvalidated
-        );
+        let needs_reopen = needs_reopen(&err);
         if needs_reopen {
-            device_failed.store(true, Ordering::Release);
+            if !device_failed.swap(true, Ordering::AcqRel) {
+                tracing::warn!(%err, "audio output stream failed; it will be reopened");
+            }
+            return;
         }
-        tracing::error!(%err, needs_reopen, "audio output stream error");
+        tracing::error!(%err, "audio output stream error");
+    }
+}
+
+/// Whether a stream error is one the stream cannot come back from in place.
+///
+/// The two rodio documents, and `POLLERR`: what cpal's ALSA thread reports for
+/// a stream whose device went to sleep under it — the machine suspended — and
+/// which it reports again the moment it is answered, because nothing on that
+/// thread resumes or re-prepares the stream. Measured on a Steam Deck coming
+/// back from a suspend taken at the login screen. Opened afresh, the device is
+/// there again.
+fn needs_reopen(err: &StreamError) -> bool {
+    match err {
+        StreamError::DeviceNotAvailable | StreamError::StreamInvalidated => true,
+        StreamError::BackendSpecific { err } => err.description.contains("POLLERR"),
+        _ => false,
     }
 }
 
@@ -965,6 +1001,28 @@ mod tests {
         assert!(failed.swap(false, Ordering::AcqRel));
 
         callback(StreamError::StreamInvalidated);
+        assert!(failed.load(Ordering::Acquire));
+    }
+
+    /// What cpal's ALSA thread says, over and over, for a stream whose device
+    /// went to sleep under it — the words it uses, taken off a Steam Deck's
+    /// journal after a resume at the login screen. That stream is dead and is
+    /// reopened; any other backend complaint is not taken for one.
+    #[test]
+    fn a_stream_the_machine_slept_under_is_reopened() {
+        let backend = |description: &str| StreamError::BackendSpecific {
+            err: rodio::cpal::BackendSpecificError {
+                description: description.to_string(),
+            },
+        };
+        assert!(needs_reopen(&backend("`alsa::poll()` returned POLLERR")));
+        assert!(!needs_reopen(&backend("some passing complaint")));
+
+        let failed = Arc::new(AtomicBool::new(false));
+        let mut callback = output_error_callback(Arc::clone(&failed));
+        for _ in 0..1000 {
+            callback(backend("`alsa::poll()` returned POLLERR"));
+        }
         assert!(failed.load(Ordering::Acquire));
     }
 }

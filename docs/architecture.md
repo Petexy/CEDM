@@ -259,9 +259,16 @@ login screen from about seven processor cores to a quarter of one.
 ## The udev rule
 
 The udev rule the package installs is the only thing any of this grants. The
-second-generation Steam Controller has no kernel gamepad driver, so CEDM reads
-its report from hidraw — and hidraw nodes are `0600 root:root`, with nothing in
-systemd's own uaccess rules tagging them. The rule tags Valve's devices
+second-generation Steam Controller — on a cable (`28de:1302`), over Bluetooth
+(`1303`), through its puck (`1304`) or a Steam Machine's receiver (`1305`) —
+has no kernel gamepad driver before Linux 7.3, and from 7.3 has one that stays
+silent in lizard mode, so CEDM reads its report from hidraw; and the Steam
+Deck's controls, whose kernel driver leaves them typing as a keyboard the
+compositor now ignores, are read the same way. The login screen reads the raw
+node even where `hid-steam` has `lizard_mode` off, which is where LineXinBar's
+shell leaves a pad to the kernel's gamepad: it starts no games, and the raw
+node answers whatever driver has the pad. And hidraw nodes are `0600 root:root`, with nothing in systemd's own
+uaccess rules tagging them. The rule tags Valve's devices
 `uaccess`, which hands them to whoever holds the *active session on the seat*:
 the greeter while the greeter is up, the user once they have signed in, and at
 no point every account on the machine.

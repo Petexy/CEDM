@@ -2227,6 +2227,9 @@ impl Application {
     fn tick(&mut self, event_loop: &ActiveEventLoop) {
         let now = Instant::now();
         self.poll_auth();
+        // A sound output that died — the machine slept under it — is let go of
+        // here, rather than left spinning until somebody presses something.
+        self.sounds.settle();
         if self.session_started {
             event_loop.exit();
             return;
