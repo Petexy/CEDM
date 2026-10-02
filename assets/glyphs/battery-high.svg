@@ -1,0 +1,26 @@
+<!--
+  Battery, high: the shell with the water most of the way across.
+
+  The drawing below is `lxb-desktop`'s `battery-high.svg`, unchanged from
+  `<svg` to the end — the login screen and the shell it hands over to draw the
+  same mark in the same corner a few seconds apart, and a battery that changed
+  shape on the way across would read as a different machine's. Only this header
+  differs, because the shell's describes the corner beside its clock and this
+  one stands alone in the top-right of a login screen.
+
+  All six share the cell and the shell exactly, so the mark does not move or
+  change size as the charge falls; what changes is only what stands inside it.
+  The wall is 2.4 units and the shadow needs two of the thirty-two clear, which
+  is why the mark is never drawn smaller than `crate::ui` allows.
+
+  lxb:shape — the material is computed from this outline; see
+  src/visual/field.rs, which is where that is explained.
+-->
+
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+  <g fill="none" stroke="#fff" stroke-width="2.4" stroke-linejoin="round">
+    <rect x="3.4" y="9.8" width="21.8" height="12.4" rx="3.2"/>
+  </g>
+  <rect x="25.6" y="13.4" width="3" height="5.2" rx="1.4" fill="#fff"/>
+  <rect x="6.2" y="12.6" width="12.3" height="6.8" rx="1.6" fill="#fff"/>
+</svg>

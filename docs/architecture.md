@@ -152,8 +152,9 @@ where an account decides what the login screen reads. [`src/faces.rs`](../src/fa
 has always said so about avatars: the greeter reads the copy `accounts-daemon`
 published under `/var/lib/AccountsService/icons` and never `~/.face`. As of the
 security pass this is true of every other setting too — the accent, both halves
-of the theme, the keyboard, the displays, the sound device — each of which reads
-the published copy and nothing else. GDM draws the same line.
+of the theme, the keyboard, the displays, the sound device, whether the
+battery's charge is written in figures — each of which reads the published copy
+and nothing else. GDM draws the same line.
 
 **And it opens what it does read through one door.**
 [`src/reading.rs`](../src/reading.rs) is the only way the greeter opens a file
@@ -206,7 +207,8 @@ not an account's, and LineXinBar keeps it where a greeter can read it:
 door as everything else here. A machine with no file has LineXinBar's defaults:
 dim after two minutes, dark after five, sleep after a quarter of an hour on the
 battery and an hour plugged in. Whether the machine is on its battery is read
-out of `/sys/class/power_supply`, leaving out a mouse's or a pad's own.
+out of `/sys/class/power_supply`, leaving out a mouse's or a pad's own, from the
+same list [the battery mark](#the-battery) is drawn from.
 
 Anything this screen hears counts as somebody being there — a key, the pointer,
 a button on a controller — and the press that lights a dark screen does only
@@ -235,6 +237,84 @@ would. The one answer logind has no word for, **Power menu**, the login screen
 gives itself: the compositor sends the button to its shell as
 `lxb_shell_v1.power_button`, and the focus moves to the bottom row's power
 buttons.
+
+## The battery
+
+A handheld's login screen is where somebody finds out whether it will last the
+evening, so the top-right corner of every display carries the shell's own
+battery mark — six drawings, from empty to full and a bolt for one that is
+filling — and, where the account asked for them, the charge in figures beside
+it. On a machine with no battery of its own there is nothing in that corner:
+not an outline and not a greyed-out mark. [`src/battery.rs`](../src/battery.rs)
+is the reading and `src/ui.rs` the drawing, whose reasons are in
+[the design](design.md#the-battery).
+
+**The mark is the machine's and the figures are the account's**, and they reach
+the screen differently for that reason. Which batteries the machine has is read
+out of `/sys/class/power_supply`, the kernel's own list, and not asked of UPower:
+this runs before anybody has signed in, on a machine whose services may not be
+up, and a handheld that showed no battery because a daemon had not started would
+be wrong about its own hardware. A supply is the machine's battery when it is of
+type `Battery`, when its `scope` is not `Device` — the cell in a wireless mouse
+is a battery by type and emphatically not the machine's — and when there is
+something in the bay, because a laptop with its battery out still lists it. Two
+batteries are one charge, weighed by what each holds and not averaged, and the
+battery is charging when any of them says so; sitting on the mains at full is
+not charging and draws a full battery. The waits' own question, whether the
+machine is on its battery, asks the same list, so the mark and the waits are
+never about two different machines.
+
+Whether the charge is **written out** is the one thing a login screen cannot
+work out for itself, so it comes the way the accent does: `battery-percent` in
+the look the account published, which is Settings > Power > Battery percentage
+and the account's own, not the machine's — `/etc/lxb/power.toml` has one answer
+for every account, and this screen shows several. It follows the account the
+selection stands on and moves along the carousel with the accent and the clock,
+and a look that says nothing leaves the figures off, as the shell does. The
+route for an account that was not listed has none. It is read back like every
+other key in the look, under [`src/reading.rs`](../src/reading.rs), and a
+`battery-percent` that is not `true` or `false` makes the whole published copy
+not a look.
+
+The other half of that is the shell's. LineXinBar republishes the look only when
+something a login screen shows has changed, and from 0.9.3 the battery's figures
+are one of those, so somebody who turns them on and signs straight out finds
+them on. Against an older LineXinBar the figures are what the account's last
+session began with, and a change made during one is not seen until a later one
+starts.
+
+**It is read again, and only as often as it matters.** The first reading is
+taken as the screen is made, so the first frame knows whether there is a mark to
+draw. After that it is every five seconds while there is a battery, which shows
+a cable pulled out or put in within about ten, and every thirty seconds
+without one, in case one is put back. A reading is a handful of small files,
+and on a laptop `capacity` and `status` are answered by the embedded controller,
+which can take tens of milliseconds over each. So it is taken on a thread that
+lives for the length of one reading and is collected on a pass the loop was
+making anyway: there is no timer and no new wake-up, and a frame never waits on
+a supply. While every display is dark nothing is asked, and the first pass after
+they light finds the reading overdue and asks at once.
+
+**Only a change in what is drawn asks for a frame.** What is drawn is which of
+the six marks, and the charge itself if the figures are written, so a charge
+falling from 72 to 71 on a screen with no figures redraws nothing and a cable
+pulled out does. On a screen that is drawn every frame anyway the new reading is
+simply used by the next one. On a low-end screen, which is drawn once a second
+while nothing moves, a change brings the next frame forward to that pass instead
+of leaving a pulled cable on screen for up to a second, and a reading that
+changes nothing drawn leaves that pace alone. The low-end cadence and the rest
+of a dark display are what they were.
+
+**Nothing in a supply directory is trusted to be small.** Each attribute is
+opened the way everything else this greeter reads is, through
+[`src/reading.rs`](../src/reading.rs), so a named pipe left in a supply's
+directory cannot hold the screen, and is read no further than 256 bytes. A file
+that goes on past that is refused and not truncated: the front of a file that
+will not stop is not a value it meant. The waits' reading goes through the same
+door now, where it used to read a whole file.
+
+How a picture of it is made without a machine in every state is under
+[where the pictures come from](design.md#where-the-pictures-come-from).
 
 ## Low-end hardware mode
 

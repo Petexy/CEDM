@@ -47,6 +47,20 @@ const CLOCK_INTERVAL: Duration = Duration::from_secs(1);
 /// chooses between are minutes long.
 const BATTERY_INTERVAL: Duration = Duration::from_secs(30);
 
+/// How often the battery's charge is read again while there is one to draw:
+/// plugging a cable in or out shows within about ten seconds, which is twice
+/// this. Read off the frame loop, on a thread of its own for the length of one
+/// read, because on a laptop the embedded controller behind a supply's files
+/// can take tens of milliseconds to answer and a frame that waited for it would
+/// drop.
+const CHARGE_INTERVAL: Duration = Duration::from_secs(5);
+
+/// How often a machine that had no battery the last time is asked again. A
+/// battery can be put back into a machine that was started without it, and that
+/// is the only reason to look at all; it is the slow pace because nothing is on
+/// screen to be wrong in the meantime.
+const NO_CHARGE_INTERVAL: Duration = Duration::from_secs(30);
+
 /// How often a screen that is dark is looked at: the pads are polled and the
 /// power button heard this often, and nothing is drawn.
 const DARK_INTERVAL: Duration = Duration::from_millis(100);
@@ -178,6 +192,27 @@ struct Args {
     /// [`Application::rest`].
     #[arg(long, hide = true, value_name = "PATH")]
     power_file: Option<PathBuf>,
+    /// Read the machine's power supplies from this directory instead of
+    /// `/sys/class/power_supply`, laid out the same way: one directory per
+    /// supply, each with `type`, `capacity` or the energies, and `status`.
+    ///
+    /// For looking at every state of the battery's mark without a machine in
+    /// every state: a picture made from this is a picture of a directory somebody
+    /// wrote, and has to be called one. The same option the shell has, and only
+    /// listened to in a preview or a screenshot — the login screen a machine
+    /// signs in at reads its own supplies.
+    #[arg(long, hide = true, value_name = "DIR")]
+    debug_power_supply: Option<PathBuf>,
+    /// Treat these accounts' published looks as saying `battery-percent = true`,
+    /// as a comma-separated list of login names.
+    ///
+    /// `--demo`'s accounts are nobody's and have nothing published, so there is
+    /// no look for the figures to be read out of; this is the one thing a demo
+    /// has to be told. Like the option above it is only listened to in a preview
+    /// or a screenshot, and it adds to what an account published rather than
+    /// replacing it.
+    #[arg(long, hide = true, value_name = "NAMES", value_delimiter = ',')]
+    debug_battery_percent: Vec<String>,
     /// Open the window at an exact surface size in physical pixels, as
     /// `WIDTHxHEIGHT`. Implies `--windowed`.
     ///
@@ -691,6 +726,22 @@ struct Application {
     /// the clocks above are, and for their reason: the screen is the account's.
     user_legends: Vec<cedm::ui::Legend>,
     legend: cedm::ui::Legend,
+    /// Whether each account's shell writes the battery's charge in figures, and
+    /// the answer for the one the selection is standing on. Held the way the
+    /// clocks are, and for their reason: the screen is the account's.
+    user_battery_percents: Vec<bool>,
+    battery_percent: bool,
+    /// What the machine's battery holds, or `None` where it has none, as of the
+    /// last time it was read. The machine's own fact and not an account's, so it
+    /// is the same for every selection.
+    charge: Option<cedm::battery::Charge>,
+    /// The directory the supplies are read from: the kernel's own, or the one
+    /// `--debug-power-supply` named in a preview.
+    power_supply: PathBuf,
+    /// The reading that is out being taken, and when the next is due. See
+    /// [`Application::watch_the_battery`].
+    charge_reading: Option<std::sync::mpsc::Receiver<Option<cedm::battery::Charge>>>,
+    next_charge_read: Instant,
     /// Which control this greeter has itself seen a press from, once it has
     /// seen one at all.
     ///
@@ -851,6 +902,29 @@ impl Application {
         let clock = user_clocks.get(selected_user).copied().unwrap_or_default();
         let user_legends = users.iter().map(user_legend).collect::<Vec<_>>();
         let legend = user_legends.get(selected_user).copied().unwrap_or_default();
+        let listened_to = args.preview || args.shot.is_some();
+        let shown_for: &[String] = if listened_to {
+            &args.debug_battery_percent
+        } else {
+            &[]
+        };
+        let user_battery_percents = users
+            .iter()
+            .map(|user| user_battery_percent(user, shown_for))
+            .collect::<Vec<_>>();
+        let battery_percent = user_battery_percents
+            .get(selected_user)
+            .copied()
+            .unwrap_or_default();
+        let power_supply = args
+            .debug_power_supply
+            .clone()
+            .filter(|_| listened_to)
+            .unwrap_or_else(|| PathBuf::from(cedm::battery::SUPPLIES));
+        // The first reading is taken here, where there is nothing to wait for
+        // yet: the first frame has to know whether there is a mark to draw, and
+        // a screenshot is that one frame.
+        let charge = cedm::battery::read_in(&power_supply);
         let user_themes = users
             .iter()
             .map(|user| user_theme(&state, user))
@@ -922,6 +996,17 @@ impl Application {
             clock,
             user_legends,
             legend,
+            user_battery_percents,
+            battery_percent,
+            charge,
+            power_supply,
+            charge_reading: None,
+            next_charge_read: now
+                + if charge.is_some() {
+                    CHARGE_INTERVAL
+                } else {
+                    NO_CHARGE_INTERVAL
+                },
             hands_on_pad: None,
             user_themes,
             keyboard: machine_keyboard.clone(),
@@ -1123,6 +1208,10 @@ impl Application {
             // still whatever this greeter has seen in somebody's hands — see
             // `Application::button_legend`.
             self.legend = cedm::ui::Legend::default();
+            // Nobody is named either, so there is no account to have asked for
+            // figures: the mark alone, which is what a look that says nothing
+            // gets.
+            self.battery_percent = false;
             // Nobody is named, so there is no account whose keyboard this
             // could be: the machine's own, which is what it was before any
             // account was looked at.
@@ -1133,6 +1222,7 @@ impl Application {
             self.material = self.user_themes[self.selected_user].clone();
             self.clock = self.user_clocks[self.selected_user];
             self.legend = self.user_legends[self.selected_user];
+            self.battery_percent = self.user_battery_percents[self.selected_user];
             self.user_keyboards[self.selected_user].clone()
         };
         visual::theme::preview_accent(&self.accent);
@@ -2257,6 +2347,7 @@ impl Application {
             }
         }
         self.rest(now);
+        self.watch_the_battery(now);
         if now >= self.next_clock_read {
             self.now = cedm::clock::Now::read();
             self.next_clock_read = now + CLOCK_INTERVAL;
@@ -2364,6 +2455,68 @@ impl Application {
             now + Duration::from_millis(16)
         };
         event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_poll.min(wake)));
+    }
+
+    /// Keep what the corner says about the battery true, without costing a
+    /// frame anything and without waking a screen that is not drawing.
+    ///
+    /// A reading is a handful of small file reads that can each wait on the
+    /// machine's embedded controller, so it is taken on a thread that lives for
+    /// the length of one and handed back through a channel this looks into on
+    /// the passes the loop was making anyway: nothing here sets a timer, and a
+    /// frame never waits for a supply. While every display is dark nothing is
+    /// asked, because nothing is on screen to be wrong; the first pass after
+    /// they light finds the reading overdue and asks at once, and the mark the
+    /// screen comes back with is the one it went dark with for as long as that
+    /// takes.
+    ///
+    /// **Only a change in what is *drawn* asks for a frame.** What is drawn is
+    /// which of six marks, and the figures if the selected account wants them —
+    /// see [`cedm::ui::battery_drawn`] — so a charge falling from 72 to 71 on a
+    /// screen with no figures forces nothing, and a cable pulled out does. On a
+    /// screen that draws every frame anyway that is a statement that nothing
+    /// extra is done; on a low-end one, which is drawn once a second while
+    /// nothing moves, it brings the next frame forward to this pass rather than
+    /// leaving a cable that was just pulled out showing for up to a second.
+    fn watch_the_battery(&mut self, now: Instant) {
+        if let Some(reading) = &self.charge_reading {
+            match reading.try_recv() {
+                Ok(charge) => {
+                    self.charge_reading = None;
+                    let before = cedm::ui::battery_drawn(self.charge, self.battery_percent);
+                    self.charge = charge;
+                    if cedm::ui::battery_drawn(self.charge, self.battery_percent) != before {
+                        self.next_frame = now;
+                    }
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => self.charge_reading = None,
+            }
+        }
+        if self.charge_reading.is_some()
+            || now < self.next_charge_read
+            || self.idle.screens() == cedm::idle::Screens::Off
+        {
+            return;
+        }
+        self.next_charge_read = now
+            + if self.charge.is_some() {
+                CHARGE_INTERVAL
+            } else {
+                NO_CHARGE_INTERVAL
+            };
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let root = self.power_supply.clone();
+        let spawned = std::thread::Builder::new()
+            .name("battery".into())
+            .spawn(move || {
+                let _ = sender.send(cedm::battery::read_in(&root));
+            });
+        // A thread that could not be had is a reading skipped; the next is due
+        // in a few seconds, and what is drawn stays what it was.
+        if spawned.is_ok() {
+            self.charge_reading = Some(receiver);
+        }
     }
 
     /// Somebody pressed or moved something. Returns whether it should go no
@@ -2636,6 +2789,8 @@ impl Application {
                 clock: self.clock,
                 session_menu: menu,
                 legend: self.button_legend(),
+                battery: self.charge,
+                battery_percent: self.battery_percent,
             },
             displays,
         );
@@ -3421,6 +3576,26 @@ fn user_clock(user: &User) -> cedm::clock::Clock {
         .unwrap_or_default()
 }
 
+/// Whether an account's shell writes the battery's charge in figures.
+///
+/// Out of the copy of `shell.toml` that account published, for the clock's
+/// reason: the setting is in a home directory this process has no business
+/// reading. An account with no published look, or one written before the shell
+/// had the row, gets no figures — off unless somebody asked. `shown_for` is the
+/// preview's way of asking on behalf of accounts that are nobody's.
+fn user_battery_percent(user: &User, shown_for: &[String]) -> bool {
+    user_battery_percent_in(Path::new(cedm::look::PUBLISHED), user, shown_for)
+}
+
+/// [`user_battery_percent`], out of any directory laid out like the published
+/// one.
+fn user_battery_percent_in(directory: &Path, user: &User, shown_for: &[String]) -> bool {
+    shown_for.contains(&user.name)
+        || cedm::look::published_in(directory, &user.name, user.uid)
+            .map(|look| look.battery_percent())
+            .unwrap_or(false)
+}
+
 /// What an account's shell says about the row that explains its buttons.
 ///
 /// Out of the copy of `shell.toml` that account published on its way into its
@@ -3509,6 +3684,11 @@ mod tests {
                 demo: false,
                 shot: None,
                 power_file: None,
+                // A directory that is not there, so what is under test is never
+                // what is in `/sys/class/power_supply` on the machine running
+                // it: no battery, which is also what most build machines have.
+                debug_power_supply: Some(PathBuf::from("/nonexistent/lxb-no-power-supply")),
+                debug_battery_percent: Vec::new(),
                 size: None,
                 displays: Vec::new(),
                 language: None,
@@ -4415,5 +4595,153 @@ mod tests {
             !refusal_sounds(Failure::Service),
             "a broken login service told the user to type it again"
         );
+    }
+
+    /// A directory laid out like `/sys/class/power_supply` with one battery in
+    /// it, under the temp directory and named for this call: nothing here is
+    /// ever the machine's own.
+    fn supplies(percent: u8, status: &str) -> PathBuf {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static CALLS: AtomicU32 = AtomicU32::new(0);
+        let root = std::env::temp_dir().join(format!(
+            "cedm-supplies-{}-{}",
+            std::process::id(),
+            CALLS.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        let battery = root.join("BAT0");
+        std::fs::create_dir_all(&battery).unwrap();
+        std::fs::write(battery.join("type"), "Battery\n").unwrap();
+        std::fs::write(battery.join("capacity"), format!("{percent}\n")).unwrap();
+        std::fs::write(battery.join("status"), format!("{status}\n")).unwrap();
+        root
+    }
+
+    /// The figures are one account's answer, out of the look it published, and
+    /// an account that published nothing — or that is nobody's — has none.
+    #[test]
+    fn an_accounts_published_look_decides_whether_its_charge_is_written() {
+        use std::os::unix::fs::MetadataExt;
+        let root = supplies(50, "Discharging").join("published");
+        std::fs::create_dir_all(&root).unwrap();
+        // Owned by whoever is running this, which is who the file is believed
+        // for; the account's uid is that.
+        let mine = std::fs::metadata(&root).unwrap().uid();
+        let account = |name: &str| User {
+            uid: mine,
+            ..user(name)
+        };
+        let on = cedm::look::Look {
+            battery_percent: Some(true),
+            ..Default::default()
+        };
+        let off = cedm::look::Look {
+            battery_percent: Some(false),
+            ..Default::default()
+        };
+        cedm::look::publish_in(&root, "alex", &on).unwrap();
+        cedm::look::publish_in(&root, "sam", &off).unwrap();
+        cedm::look::publish_in(&root, "jordan", &cedm::look::Look::default()).unwrap();
+
+        assert!(user_battery_percent_in(&root, &account("alex"), &[]));
+        assert!(!user_battery_percent_in(&root, &account("sam"), &[]));
+        assert!(
+            !user_battery_percent_in(&root, &account("jordan"), &[]),
+            "a look that says nothing leaves the figures off",
+        );
+        assert!(
+            !user_battery_percent_in(&root, &account("nobody"), &[]),
+            "an account that published nothing has none",
+        );
+        // The preview's way of asking, for accounts that are nobody's, adds to
+        // what was published and takes nothing away.
+        let asked = ["sam".to_string()];
+        assert!(user_battery_percent_in(&root, &account("sam"), &asked));
+        assert!(user_battery_percent_in(&root, &account("alex"), &asked));
+        assert!(!user_battery_percent_in(&root, &account("jordan"), &asked));
+        let _ = std::fs::remove_dir_all(root.parent().unwrap());
+    }
+
+    /// Moving along the carousel moves the figures with it, and nobody's
+    /// account — the route for one that was not listed — has none.
+    #[test]
+    fn the_figures_follow_the_account_the_selection_stands_on() {
+        let mut application = preview_application(vec![user("Alex"), user("Sam")]);
+        application.user_battery_percents = vec![true, false];
+        application.select_user_with_motion(0, 0);
+        assert!(application.battery_percent);
+        application.select_user_with_motion(1, 1);
+        assert!(!application.battery_percent);
+        application.select_user_with_motion(0, -1);
+        assert!(application.battery_percent);
+        // One past the listed accounts is the route for one that is not.
+        application.select_user_with_motion(2, 1);
+        assert!(application.other_account_selected());
+        assert!(!application.battery_percent);
+    }
+
+    /// A cable pulled out is read within a pass or two of the interval, drawn,
+    /// and brings the next frame forward; a charge that moved without changing
+    /// what is drawn does neither.
+    #[test]
+    fn a_changed_reading_reaches_the_screen_and_an_unchanged_picture_asks_for_nothing() {
+        let wait = |application: &mut Application| {
+            let until = Instant::now() + Duration::from_secs(10);
+            application.next_charge_read = Instant::now();
+            application.watch_the_battery(Instant::now());
+            while application.charge_reading.is_some() && Instant::now() < until {
+                std::thread::sleep(Duration::from_millis(5));
+                application.watch_the_battery(Instant::now());
+            }
+            assert!(application.charge_reading.is_none(), "a reading never came");
+        };
+        let first = supplies(72, "Discharging");
+        let mut application = preview_application(vec![user("Alex")]);
+        application.power_supply = first.clone();
+        application.battery_percent = false;
+        application.charge = None;
+        let later = Instant::now() + Duration::from_secs(3600);
+        application.next_frame = later;
+        wait(&mut application);
+        assert_eq!(
+            application.charge,
+            Some(cedm::battery::Charge {
+                percent: 72,
+                charging: false
+            })
+        );
+        assert!(application.next_frame < later, "a battery appeared unseen");
+
+        // 72 to 71 with no figures on the screen: the same mark, no frame.
+        application.next_frame = later;
+        std::fs::write(first.join("BAT0/capacity"), "71\n").unwrap();
+        wait(&mut application);
+        assert_eq!(application.charge.map(|charge| charge.percent), Some(71));
+        assert_eq!(
+            application.next_frame, later,
+            "an identical picture woke it"
+        );
+
+        // With the figures on it is a different picture.
+        application.battery_percent = true;
+        std::fs::write(first.join("BAT0/capacity"), "70\n").unwrap();
+        wait(&mut application);
+        assert!(application.next_frame < later);
+
+        // And a cable in is one either way.
+        application.battery_percent = false;
+        application.next_frame = later;
+        std::fs::write(first.join("BAT0/status"), "Charging\n").unwrap();
+        wait(&mut application);
+        assert!(application.next_frame < later);
+        assert!(application.charge.is_some_and(|charge| charge.charging));
+
+        // A battery taken away leaves nothing to draw.
+        std::fs::remove_dir_all(first.join("BAT0")).unwrap();
+        application.next_frame = later;
+        wait(&mut application);
+        assert_eq!(application.charge, None);
+        assert!(application.next_frame < later);
+        let _ = std::fs::remove_dir_all(first);
     }
 }

@@ -4,6 +4,7 @@ pub mod accent;
 pub mod attached;
 pub mod audio;
 pub mod auth;
+pub mod battery;
 pub mod cadence;
 pub mod clock;
 pub mod config;

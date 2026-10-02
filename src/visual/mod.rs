@@ -44,11 +44,26 @@ pub const PAD_EAST_SLOT: u32 = 16;
 pub const PAD_NORTH_SLOT: u32 = 17;
 pub const KEY_ENTER_SLOT: u32 = 18;
 pub const KEY_ESCAPE_SLOT: u32 = 19;
+/// The battery's six states, in the order of their levels and then the one that
+/// outranks them: the corner of the login screen draws exactly one of these on a
+/// machine that has a battery, and none at all on one that has not. See
+/// `crate::ui`'s `battery_slot`, which is where a charge is turned into one.
+///
+/// The shell's own drawings, byte for byte from `<svg` on, and six cells rather
+/// than one with a level drawn into it: what a battery looks like at a charge is
+/// the shape, and a shape is a measurement of its outline, so each state is its
+/// own.
+pub const BATTERY_EMPTY_SLOT: u32 = 20;
+pub const BATTERY_LOW_SLOT: u32 = 21;
+pub const BATTERY_HALF_SLOT: u32 = 22;
+pub const BATTERY_HIGH_SLOT: u32 = 23;
+pub const BATTERY_FULL_SLOT: u32 = 24;
+pub const BATTERY_CHARGING_SLOT: u32 = 25;
 /// The first cell of the clock's own alphabet: the ten digits by value, then the
 /// colon, one cell each. Not drawings — each holds a *measurement* of a
 /// character's shape, which is what lets the shader shade the time out of the
 /// same water it shades the marks out of. See [`letters`].
-pub const LETTER_SLOT: u32 = 20;
+pub const LETTER_SLOT: u32 = 26;
 /// The first cell an account's own picture goes in; one per enumerated account,
 /// in the order they were enumerated.
 pub const FACE_SLOT: u32 = LETTER_SLOT + letters::SET.len() as u32;
@@ -63,25 +78,27 @@ pub const SQUIRCLE_CORNER: f32 = 4.0;
 /// the one thing that cannot be redrawn at whatever size it is asked for.
 const CELL: u32 = 256;
 const ATLAS_COLUMNS: u32 = 4;
-/// Eighteen drawings, fourteen letters of the clock, and a cell for each
-/// account's picture. Thirteen rows of four leaves eighteen faces, which is
-/// more local interactive accounts than a machine with a login screen on a
-/// television has; past that an account keeps its initial, which is what every
-/// account without a published picture shows anyway.
+/// Twenty-four drawings, fifteen letters of the clock and the battery, and a
+/// cell for each account's picture. Fifteen rows of four leaves nineteen faces,
+/// which is more local interactive accounts than a machine with a login screen
+/// on a television has; past that an account keeps its initial, which is what
+/// every account without a published picture shows anyway.
 ///
-/// Five rows more than the drawings and the faces alone needed. The letters
-/// could have been packed into the faces' band instead, and are deliberately
-/// not: an account's picture arriving would then decide whether the clock had a
-/// cell, and a login screen with seventeen accounts on it would be one with no
-/// time on it.
+/// Fifteen cells more than the faces alone needed. The letters could have been
+/// packed into the faces' band instead, and are deliberately not: an account's
+/// picture arriving would then decide whether the clock had a cell, and a login
+/// screen with seventeen accounts on it would be one with no time on it.
 ///
 /// It is **the face count that fixes this number**, not the drawings. The
 /// legend's five marks pushed the letters and the faces five cells down the
 /// atlas, and a row kept at eleven would have answered by quietly taking five
 /// accounts' pictures away — a login screen where the sixth account down the
 /// carousel lost its face because a row of button hints had been added to the
-/// column. Two more rows is a megabyte of atlas; it is the cheaper of the two.
-const ATLAS_ROWS: u32 = 13;
+/// column. The battery's six marks and the sign for a per cent are seven cells
+/// more, and the same arithmetic took two rows for them: kept at thirteen, only
+/// eleven faces would have been left, so the rows grew to keep the carousel at
+/// nineteen. Two more rows is a megabyte of atlas; it is the cheaper of the two.
+const ATLAS_ROWS: u32 = 15;
 pub const MAX_FACES: usize = (ATLAS_COLUMNS * ATLAS_ROWS - FACE_SLOT) as usize;
 
 /// The square a portrait has to arrive at to go in a cell.
@@ -1235,13 +1252,14 @@ fn pipeline<'a>(
 ///
 /// Every one of them is a *shape*: the cell holds how far each pixel of it is
 /// from the nearest edge of the mark, and the shader builds the material out of
-/// that — see [`field`], which is where a drawing is made and measured. Fifteen
+/// that — see [`field`], which is where a drawing is made and measured. Twenty-one
 /// are `lxb-desktop`'s own files, byte for byte from `<svg` on: the four arrow
-/// caps, its five pad buttons, its two keycaps, the keyboard's close key, and
-/// its power, cycle and display marks under this repository's names. The other
-/// three are drawn here in the same language. See the guard below, which is the
-/// shell's, and which is what keeps a new one from arriving as a picture.
-const GLYPHS: [(u32, &[u8]); 18] = [
+/// caps, its five pad buttons, its two keycaps, the keyboard's close key, its
+/// power, cycle and display marks under this repository's names, and the six
+/// states of its battery. The other three are drawn here in the same language.
+/// See the guard below, which is the shell's, and which is what keeps a new one
+/// from arriving as a picture.
+const GLYPHS: [(u32, &[u8]); 24] = [
     (
         ARROW_LEFT_SLOT,
         include_bytes!("../../assets/glyphs/arrow-left.svg").as_slice(),
@@ -1314,6 +1332,30 @@ const GLYPHS: [(u32, &[u8]); 18] = [
         KEY_ESCAPE_SLOT,
         include_bytes!("../../assets/glyphs/key-escape.svg").as_slice(),
     ),
+    (
+        BATTERY_EMPTY_SLOT,
+        include_bytes!("../../assets/glyphs/battery-empty.svg").as_slice(),
+    ),
+    (
+        BATTERY_LOW_SLOT,
+        include_bytes!("../../assets/glyphs/battery-low.svg").as_slice(),
+    ),
+    (
+        BATTERY_HALF_SLOT,
+        include_bytes!("../../assets/glyphs/battery-half.svg").as_slice(),
+    ),
+    (
+        BATTERY_HIGH_SLOT,
+        include_bytes!("../../assets/glyphs/battery-high.svg").as_slice(),
+    ),
+    (
+        BATTERY_FULL_SLOT,
+        include_bytes!("../../assets/glyphs/battery-full.svg").as_slice(),
+    ),
+    (
+        BATTERY_CHARGING_SLOT,
+        include_bytes!("../../assets/glyphs/battery-charging.svg").as_slice(),
+    ),
 ];
 
 /// Build the atlas: the two painted cells, the measured marks and letters, and
@@ -1367,13 +1409,7 @@ fn atlas(
     // rasterised as it was drawn instead — it would come out of the shader as a
     // pale smear otherwise — and the guard in the tests below is what stops one
     // shipping that way.
-    for (slot, svg) in GLYPHS {
-        let cell = if field::is_shape(svg) {
-            field::of_drawing(svg, CELL)
-        } else {
-            tracing::warn!(slot, "a drawing that is not a shape");
-            rasterise_svg(svg, CELL)
-        };
+    for (slot, cell) in measured_drawings() {
         if let Some(cell) = cell {
             into_cell(slot, &cell);
         }
@@ -1412,6 +1448,49 @@ fn atlas(
     let view = texture.create_view(&Default::default());
     let group = texture_bind_group(device, layout, sampler, &view, "atlas");
     (texture, group)
+}
+
+/// Every drawing in [`GLYPHS`], measured into the cell the shader reads a shape
+/// out of, in the order they are listed.
+///
+/// Twenty-four exact distance transforms over a 1024-square grid, which is most
+/// of what the first frame costs, and they are twenty-four separate problems.
+/// They are independent of each other, so they are taken on threads the way
+/// [`letters::fields`] takes the clock's: as many at a time as the machine has
+/// cores and no more, because each holds a few grids of its own and all of them
+/// at once is hundreds of megabytes for a login screen to be carrying while it
+/// has nothing drawn yet.
+///
+/// `None` for a drawing that did not rasterise at all, which leaves its cell as
+/// the empty one it started as.
+fn measured_drawings() -> Vec<(u32, Option<Vec<u8>>)> {
+    let at_once = std::thread::available_parallelism()
+        .map(std::num::NonZeroUsize::get)
+        .unwrap_or(1);
+    let mut cells = Vec::with_capacity(GLYPHS.len());
+    for chunk in GLYPHS.chunks(at_once) {
+        cells.extend(std::thread::scope(|scope| {
+            let workers: Vec<_> = chunk
+                .iter()
+                .map(|(slot, svg)| {
+                    scope.spawn(move || {
+                        let cell = if field::is_shape(svg) {
+                            field::of_drawing(svg, CELL)
+                        } else {
+                            tracing::warn!(slot, "a drawing that is not a shape");
+                            rasterise_svg(svg, CELL)
+                        };
+                        (*slot, cell)
+                    })
+                })
+                .collect();
+            workers
+                .into_iter()
+                .filter_map(|worker| worker.join().ok())
+                .collect::<Vec<_>>()
+        }));
+    }
+    cells
 }
 
 fn rasterise_svg(data: &[u8], size: u32) -> Option<Vec<u8>> {
@@ -1978,11 +2057,11 @@ pub(crate) mod tests {
     fn every_glyph_ships_as_the_shape_of_itself() {
         assert_eq!(
             GLYPHS.len(),
-            18,
+            24,
             "four arrow caps, two controller hints, the keyboard's close key \
              and the button that raises it, the three machine actions, the \
-             route to an account that was not listed, the session badge, and \
-             the five buttons the legend draws"
+             route to an account that was not listed, the session badge, the \
+             five buttons the legend draws, and the battery's six states"
         );
         let flat: Vec<u32> = GLYPHS
             .iter()
@@ -2011,26 +2090,10 @@ pub(crate) mod tests {
             }
         }
 
-        // Eighteen exact transforms over a 1024-square grid is the whole cost of
-        // this test, and they are eighteen separate problems. As many at a time
-        // as the machine has cores and no more: each holds three grids of its
-        // own, and all of them at once is a gigabyte.
-        let at_once = std::thread::available_parallelism()
-            .map(std::num::NonZeroUsize::get)
-            .unwrap_or(1);
-        let mut fields: Vec<(u32, Option<Vec<u8>>)> = Vec::new();
-        for chunk in GLYPHS.chunks(at_once) {
-            fields.extend(std::thread::scope(|scope| {
-                let workers: Vec<_> = chunk
-                    .iter()
-                    .map(|(slot, svg)| scope.spawn(|| (*slot, field::of_drawing(svg, CELL))))
-                    .collect();
-                workers
-                    .into_iter()
-                    .map(|worker| worker.join().expect("a measurement"))
-                    .collect::<Vec<_>>()
-            }));
-        }
+        // The same measurement the atlas is built from, on the same threads —
+        // see [`measured_drawings`], which is what keeps the cost of this test
+        // from being twenty-four transforms one after another.
+        let fields = measured_drawings();
 
         for (slot, field) in &fields {
             let (slot, field) = (*slot, field);

@@ -558,7 +558,9 @@ fn pad_of(sysfs: &Path) -> Option<Pad> {
 /// PPPPPPPP` in hexadecimal — so that the same pad on a cable and over
 /// Bluetooth is one pad.
 fn pad_by_hid_id(uevent: &str) -> Option<Pad> {
-    let id = uevent.lines().find_map(|line| line.strip_prefix("HID_ID="))?;
+    let id = uevent
+        .lines()
+        .find_map(|line| line.strip_prefix("HID_ID="))?;
     let mut parts = id.trim().split(':');
     let mut next = || u32::from_str_radix(parts.next()?, 16).ok();
     let (bus, vendor, product) = (next()?, next()?, next()?);
@@ -791,11 +793,18 @@ mod tests {
     fn a_pad_is_found_by_its_ids_on_either_bus() {
         let pad = |id: &str| pad_by_hid_id(&format!("DRIVER=hid-steam\nHID_ID={id}\n"));
         for product in ["1302", "1304", "1305"] {
-            assert_eq!(pad(&format!("0003:000028DE:0000{product}")), Some(Pad::Puck));
+            assert_eq!(
+                pad(&format!("0003:000028DE:0000{product}")),
+                Some(Pad::Puck)
+            );
         }
         assert_eq!(pad("0005:000028DE:00001303"), Some(Pad::Puck));
         assert_eq!(pad("0003:000028DE:00001205"), Some(Pad::Deck));
-        for not_ours in ["0003:000028DE:00001102", "0003:000028DE:00001142", "0003:0000045E:00001304"] {
+        for not_ours in [
+            "0003:000028DE:00001102",
+            "0003:000028DE:00001142",
+            "0003:0000045E:00001304",
+        ] {
             assert_eq!(pad(not_ours), None, "{not_ours}");
         }
         assert_eq!(pad("0018:000028DE:00001304"), None);

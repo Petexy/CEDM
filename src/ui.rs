@@ -197,6 +197,56 @@ fn legend_scale(height: f32) -> f32 {
     (height / 1080.0).clamp(0.6, 2.5)
 }
 
+/// The battery in the top-right corner of every display, which is the corner the
+/// shell writes its own in a moment after this screen is gone.
+///
+/// **The shell's numbers, and for the legend's reason** — see [`LEGEND_INSET`].
+/// `CORNER_INSET`, `CORNER_TOP`, `CORNER_CLOCK`, `MARK_LINE` and `BATTERY_MARK`
+/// there: the mark's square cell hugs the right edge by the same distance and
+/// is centred on the line the shell's clock is written on, so the one thing the
+/// two programs share in that corner does not move when one hands over to the
+/// other. It is drawn at [`legend_scale`] for the same reason that row is, and
+/// not at [`Metrics::scale`]: the shell measures its whole corner against the
+/// height of a 1080-line display, and a mark drawn by this greeter's own scale
+/// would be a different size from the one that replaces it.
+const CORNER_INSET: f32 = 48.0;
+const CORNER_TOP: f32 = 36.0;
+const CORNER_CLOCK: f32 = 24.0;
+const CORNER_MARK_LINE: f32 = 0.60;
+/// How big the battery's cell is, and where its outline starts inside it.
+///
+/// A quarter larger than the square the shell's wireless fan gets, because the
+/// battery lies across the middle of its square cell and would otherwise come out
+/// lighter than the digits beside it. The shell's six drawings have a wall of 2.4
+/// units of thirty-two and the shader gives a mark a bevel of 0.075 of its drawn
+/// size: a wall thinner than that has no flat face and a gap narrower closes up,
+/// so a mark drawn much smaller stops being a battery and becomes a smudge. This
+/// is the size a handheld decides — the shell's own comment on its `BATTERY_MARK`
+/// — and it is multiplied by [`legend_scale`], whose floor is the 0.6 the shell's
+/// corner has, so nothing here is drawn smaller than the shell draws it on the
+/// same display.
+///
+/// The cell is square and the battery is not, which leaves a fifteenth of the
+/// cell empty in front of the shell's outer face. Air asked for beside the mark
+/// is measured from the outline and not from the cell.
+const BATTERY_MARK: f32 = 40.0;
+const BATTERY_MARK_INSET: f32 = 2.2 / 32.0;
+/// The charge in figures: their size, and the air between the last of them and
+/// the mark's outline.
+///
+/// Smaller than the clock, and in the same material, which cannot be shrunk
+/// without limit: the stems of the bold face are a seventh of its size across
+/// and a bead needs two bevels' width to get a flat face at all. The shell's
+/// own corner sets these at eighteen and calls it as small as the water goes;
+/// beside the mark rather than over it there is room for a little more. The
+/// gap is the one the shell's guide header leaves between the same two things.
+const BATTERY_FIGURES: f32 = 20.0;
+const BATTERY_FIGURES_GAP: f32 = 9.0;
+/// How solid the mark and its figures are written: the legend's, and for its
+/// reason — this is writing on the wallpaper rather than on a pane that could
+/// hold it up.
+const BATTERY_INK: f32 = 0.85;
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Focus {
     Users,
@@ -380,6 +430,16 @@ pub struct View<'a> {
     /// Whether this screen says what its buttons do, and which control it draws
     /// a picture of them from.
     pub legend: Legend,
+    /// What the machine's battery holds, or `None` on a machine that has none —
+    /// which is a screen with nothing in the corner, not a greyed-out mark. The
+    /// machine's own fact: the same on every display and for every account, and
+    /// re-read while the screen is up. See [`crate::battery`].
+    pub battery: Option<crate::battery::Charge>,
+    /// Whether the charge is written out in figures beside the mark: the
+    /// setting of the account the selection is standing on, out of the look it
+    /// published, held the way the clock is. See
+    /// [`crate::look::Look::battery_percent`].
+    pub battery_percent: bool,
 }
 
 /// The session menu's state, as far as drawing it is concerned.
@@ -490,6 +550,7 @@ fn compose(output: &mut Output, view: &View<'_>, width: f32, height: f32) {
     build_session(output, view, layout, metrics, pulse, fade, interactive);
     build_footer(output, view, layout, metrics, pulse, fade, interactive);
     build_legend(output, view, layout, fade);
+    build_battery(output, view, layout, fade);
     build_back(output, view, layout, metrics, pulse, fade, interactive);
 
     // Only the middle of the column changes between screens, so only the
@@ -860,6 +921,13 @@ struct Layout {
     legend_row: [f32; 4],
     legend_size: LegendSize,
     back: [f32; 4],
+    /// The battery's square cell in the top-right corner, and where its figures
+    /// are written: the edge their last character stands against, the middle of
+    /// the line, and the size of the type. Where they are is a fact about the
+    /// display and not about whether there is a battery, so nothing here moves
+    /// when one appears. See [`build_battery`].
+    battery: [f32; 4],
+    figures: [f32; 3],
     clock: [f32; 4],
     date: [f32; 4],
     /// Whether the clock is drawn: beside the column, or above it on a display
@@ -933,6 +1001,25 @@ impl Layout {
         let legend_middle = metrics.height
             - (LEGEND_CORNER_TOP + LEGEND_CORNER_MARK * LEGEND_MARK_LINE) * legend_scale;
         let legend_y = legend_middle - legend_h * 0.5;
+
+        // The battery's corner, on the shell's own line and at the shell's own
+        // size — see [`CORNER_INSET`]. The figures stand against the mark's
+        // outline rather than its cell and end where they end whatever they
+        // say, so a charge falling from a hundred to ninety-nine moves no mark.
+        let battery_cell = BATTERY_MARK * legend_scale;
+        let battery_x = metrics.width - CORNER_INSET * legend_scale - battery_cell;
+        let battery_middle = (CORNER_TOP + CORNER_CLOCK * CORNER_MARK_LINE) * legend_scale;
+        let battery = [
+            battery_x,
+            battery_middle - battery_cell * 0.5,
+            battery_cell,
+            battery_cell,
+        ];
+        let figures = [
+            battery_x + BATTERY_MARK_INSET * battery_cell - BATTERY_FIGURES_GAP * legend_scale,
+            battery_middle,
+            BATTERY_FIGURES * legend_scale,
+        ];
 
         // Stacked, the column starts under the day and stops above the row of
         // hints; beside the hour it runs the height of the display.
@@ -1219,6 +1306,8 @@ impl Layout {
                 step: LEGEND_STEP * legend_scale,
             },
             back,
+            battery,
+            figures,
             clock,
             date,
             split,
@@ -1366,13 +1455,40 @@ fn clock_time(scene: &mut Scene, time: &str, rect: [f32; 4], size: f32, colour: 
         return;
     };
     let width = run.iter().map(|letter| letter.advance).sum::<f32>() * size;
-    let side = visual::letters::LETTER_BOX * size;
-    // Every letter is drawn in a square of the same size, so the bevel the
-    // shader gives each of them is the same depth: a colon in a box its own size
-    // would be modelled twice as deeply as the digits beside it. What moves per
-    // letter is only where that square is centred.
     let middle = rect[1] + (visual::letters::BASELINE - visual::letters::LETTER_MIDDLE) * size;
-    let mut pen = rect[0] + (rect[2] - width) * 0.5;
+    lay_letters(
+        scene,
+        &run,
+        rect[0] + (rect[2] - width) * 0.5,
+        middle,
+        size,
+        colour,
+    );
+}
+
+/// One run of the clock's letters, from `left` and centred on the line `middle`.
+///
+/// Every letter is drawn in a square of the same size, so the bevel the shader
+/// gives each of them is the same depth: a colon in a box its own size would be
+/// modelled twice as deeply as the digits beside it. What moves per letter is
+/// only where that square is centred. The squares are centred on the middle of
+/// the digits — see [`visual::letters::LETTER_MIDDLE`] — so `middle` is the line
+/// a digit is centred on, which is what a mark standing beside it is centred on
+/// too.
+///
+/// The one place the clock's letters are put on the screen, and the reason the
+/// hour and the battery's figures are the same material at the same cut:
+/// whatever one of them is asked for, the other is.
+fn lay_letters(
+    scene: &mut Scene,
+    run: &[visual::letters::Letter],
+    left: f32,
+    middle: f32,
+    size: f32,
+    colour: [f32; 4],
+) {
+    let side = visual::letters::LETTER_BOX * size;
+    let mut pen = left;
     for letter in run {
         // The space between the hour and AM or PM moves the pen and draws
         // nothing; see [`visual::letters::SPACE`].
@@ -1382,7 +1498,10 @@ fn clock_time(scene: &mut Scene, time: &str, rect: [f32; 4], size: f32, colour: 
         };
         // `shaded` is what gives the quad its depth and its light, which is also
         // what says its cell holds a shape rather than a picture — the letters go
-        // through the same door the marks do.
+        // through the same door the marks do. `colour`'s alpha travels in `fade`
+        // rather than in the colour, because on a measured shape the colour is
+        // the stain and `fade` is how solid the mark is; a letter that faded
+        // through its colour would grow clearer instead of fainter.
         scene.quads.push(shaded(Quad {
             rect: [
                 pen + letter.advance * size * 0.5 - side * 0.5,
@@ -1397,6 +1516,96 @@ fn clock_time(scene: &mut Scene, time: &str, rect: [f32; 4], size: f32, colour: 
         }));
         pen += letter.advance * size;
     }
+}
+
+/// The battery in the top-right corner: the mark that says how full it is or
+/// that it is filling, and the charge in figures if the account asked for them.
+///
+/// **Nothing at all on a machine with no battery** — not an outline, not a
+/// greyed-out one — which is [`View::battery`] being `None`. Drawn on every
+/// display, because a charge on one screen and none on the one beside it would
+/// be two answers to one question, and it is the machine's rather than the
+/// account's: the carousel can walk from one person to another and the mark does
+/// not blink. Only the figures belong to the account, and they follow it.
+///
+/// It is the shell's mark in the shell's corner, and the shell's ink — see
+/// [`CORNER_INSET`] — which here is the clock's soft text, the accent's pale
+/// cast. The figures stand to the left of the mark and are right-aligned
+/// against it, so what they say can be any length and the mark stays where it
+/// is; the shell puts them above, and there the time shares the line.
+fn build_battery(output: &mut Output, view: &View<'_>, layout: Layout, fade: f32) {
+    let Some(charge) = view.battery else {
+        return;
+    };
+    let ink = theme::theme().text_soft.a(BATTERY_INK * fade);
+    glyph(
+        &mut output.scene,
+        battery_slot(charge),
+        layout.battery,
+        1.0,
+        ink,
+    );
+    if view.battery_percent {
+        let [right, middle, size] = layout.figures;
+        // Nothing at all if a character is not in the clock's alphabet, which
+        // `charge_figures` cannot produce: a charge with a digit missing would
+        // be a wrong charge.
+        let Some(run) = visual::letters::run(&charge_figures(charge.percent)) else {
+            return;
+        };
+        let width = run.iter().map(|letter| letter.advance).sum::<f32>() * size;
+        lay_letters(&mut output.scene, &run, right - width, middle, size, ink);
+    }
+}
+
+/// Which of the six batteries a charge is drawn with.
+///
+/// Filling outranks the level, and it is the one place this mark says less than
+/// it knows: a bolt small enough to stand beside a bar would be thinner than its
+/// own bevel at the size the corner draws this, so the charging mark has no bar
+/// in it. Whoever wants both turns the figures on. A battery sitting on the mains
+/// at full is not charging — see [`crate::battery::Charge`] — and draws full.
+pub fn battery_slot(charge: crate::battery::Charge) -> u32 {
+    use crate::battery::Level;
+    if charge.charging {
+        return visual::BATTERY_CHARGING_SLOT;
+    }
+    match Level::of(charge.percent) {
+        Level::Empty => visual::BATTERY_EMPTY_SLOT,
+        Level::Low => visual::BATTERY_LOW_SLOT,
+        Level::Half => visual::BATTERY_HALF_SLOT,
+        Level::High => visual::BATTERY_HIGH_SLOT,
+        Level::Full => visual::BATTERY_FULL_SLOT,
+    }
+}
+
+/// Everything the corner draws about the battery, as one value: which of the six
+/// marks, and the figures if they are written.
+///
+/// What a frame has to be redrawn for, and nothing more: two readings that
+/// answer alike here are the same picture, and a loop that is drawn on a slow
+/// beat has no business being woken by the difference. The figures are the
+/// charge itself, so with them on every per cent is a change, and with them off
+/// only a level or a cable is.
+pub fn battery_drawn(
+    charge: Option<crate::battery::Charge>,
+    figures: bool,
+) -> Option<(u32, Option<u8>)> {
+    charge.map(|charge| {
+        (
+            battery_slot(charge),
+            figures.then_some(charge.percent.min(100)),
+        )
+    })
+}
+
+/// The charge as it is written beside the mark: `72%`, and `100%` at the most.
+///
+/// Held to a hundred whatever it was handed, which a [`crate::battery::Charge`]
+/// already is by construction; the corner is the wrong place to find out a
+/// reading was not.
+fn charge_figures(percent: u8) -> String {
+    format!("{}%", percent.min(100))
 }
 
 /// Who is signing in: the avatar, the greeting, and the name.
@@ -3104,6 +3313,7 @@ pub fn keyboard_key_rect(row: usize, column: usize, width: f32, height: f32) -> 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::battery::Charge;
     use crate::sessions::Kind;
     use std::path::PathBuf;
 
@@ -3324,6 +3534,10 @@ mod tests {
             // that puts every word of the row into the scene, so that the
             // checks on what this screen says cover them all.
             legend: Legend::default(),
+            // No battery, which is also what most build machines have: a test
+            // that wants one says so, and none of them reads the machine's.
+            battery: None,
+            battery_percent: false,
         }
     }
 
@@ -4021,7 +4235,7 @@ mod tests {
             },
             Phase::Error("Try again"),
         ];
-        let check = |where_: &str, output: Output| {
+        let check = |where_: &str, output: Output, extra_letters: usize, extra_marks: usize| {
             let mut marks = 0;
             let mut letters = 0;
             for quad in &output.scene.quads {
@@ -4052,8 +4266,15 @@ mod tests {
             // And the check has teeth: this screen really does draw both kinds.
             // The footer's four, the back arrow, the session badge and whatever
             // else the screen has on it, and the five letters of the clock.
-            assert!(marks > 6, "{where_}: {marks} marks were drawn");
-            assert_eq!(letters, 5, "{where_}: {letters} letters of the clock");
+            assert!(
+                marks > 6 + extra_marks,
+                "{where_}: {marks} marks were drawn"
+            );
+            assert_eq!(
+                letters,
+                5 + extra_letters,
+                "{where_}: {letters} letters of the clock"
+            );
         };
         for phase in phases {
             let mut view = view(&users, &sessions, phase, Focus::Prompt, FOOTER.as_slice());
@@ -4063,7 +4284,24 @@ mod tests {
             view.keyboard_interactive = true;
             view.keyboard_arrival = 1.0;
             let where_ = format!("{:?}", view.phase);
-            check(&where_, one_display(view, 1600.0, 900.0));
+            check(&where_, one_display(view, 1600.0, 900.0), 0, 0);
+        }
+
+        // And with the battery up, in the same state: its mark is a measured
+        // cell and so is every letter of its figures, and none of them may be
+        // drawn the wrong way round or keep its strength in its colour.
+        for phase in phases {
+            let mut view = view(&users, &sessions, phase, Focus::Prompt, FOOTER.as_slice());
+            view.keyboard = Some(&board);
+            view.keyboard_interactive = true;
+            view.keyboard_arrival = 1.0;
+            view.battery = Some(Charge {
+                percent: 72,
+                charging: false,
+            });
+            view.battery_percent = true;
+            let where_ = format!("{:?} with the battery", view.phase);
+            check(&where_, one_display(view, 1600.0, 900.0), 3, 1);
         }
 
         // And with the session menu open, which is the one screen that draws a
@@ -4081,7 +4319,7 @@ mod tests {
             progress: 1.0,
             interactive: true,
         });
-        check("the session menu", one_display(open, 1600.0, 900.0));
+        check("the session menu", one_display(open, 1600.0, 900.0), 0, 0);
     }
 
     /// A mark fades out with the screen it is standing on.
@@ -5962,6 +6200,661 @@ mod tests {
                     "{text:?} slid out of the column"
                 );
             }
+        }
+    }
+
+    // --- the battery in the top-right corner ---------------------------------
+
+    fn charge(percent: u8, charging: bool) -> Charge {
+        Charge { percent, charging }
+    }
+
+    /// Every shape of display the corner has to be right on: the two the
+    /// shell's own corner is checked at, the handheld, the wide and the narrow,
+    /// and a display standing on its side. At 1080 lines the corner is drawn at
+    /// the scale it has in the shell, and at 2160 at twice that.
+    const SHAPES: [(f32, f32); 12] = [
+        (1280.0, 800.0),
+        (1280.0, 720.0),
+        (1920.0, 1200.0),
+        (1920.0, 1080.0),
+        (1600.0, 1200.0),
+        (2560.0, 1080.0),
+        (3840.0, 2160.0),
+        (1080.0, 1920.0),
+        (720.0, 1280.0),
+        (2160.0, 3840.0),
+        // Too narrow for the clock, where the column is the whole display and
+        // the corner is drawn over its glass.
+        (800.0, 600.0),
+        (1024.0, 600.0),
+    ];
+
+    const BATTERY_SLOTS: [u32; 6] = [
+        visual::BATTERY_EMPTY_SLOT,
+        visual::BATTERY_LOW_SLOT,
+        visual::BATTERY_HALF_SLOT,
+        visual::BATTERY_HIGH_SLOT,
+        visual::BATTERY_FULL_SLOT,
+        visual::BATTERY_CHARGING_SLOT,
+    ];
+
+    /// The battery's own quads in a frame: the mark's, and one per letter of the
+    /// figures.
+    fn battery_quads(output: &Output) -> Vec<Quad> {
+        battery_quads_in(&output.scene.quads)
+    }
+
+    fn battery_quads_in(quads: &[Quad]) -> Vec<Quad> {
+        let marks: Vec<Quad> = quads
+            .iter()
+            .filter(|quad| BATTERY_SLOTS.contains(&quad.slot))
+            .copied()
+            .collect();
+        let Some(mark) = marks.first().copied() else {
+            return marks;
+        };
+        let middle = mark.rect[1] + mark.rect[3] * 0.5;
+        marks
+            .into_iter()
+            .chain(
+                quads
+                    .iter()
+                    // Figures only: the clock is made of the same cells, and what
+                    // tells them apart is the line they stand on, and the mark
+                    // they stand to the left of.
+                    .filter(|quad| (visual::LETTER_SLOT..visual::FACE_SLOT).contains(&quad.slot))
+                    .filter(|quad| (quad.rect[1] + quad.rect[3] * 0.5 - middle).abs() < 0.01)
+                    .filter(|quad| quad.rect[0] + quad.rect[2] <= mark.rect[0] + 0.01)
+                    .copied(),
+            )
+            .collect()
+    }
+
+    /// What of a quad is ink, as a rectangle: a letter is the width of its own
+    /// advance and the height of a digit, and the mark is the outline of the
+    /// shell inside its square cell — the part of all six drawings that does not
+    /// change.
+    fn ink_of(quad: &Quad) -> [f32; 4] {
+        let [x, y, w, h] = quad.rect;
+        if (visual::LETTER_SLOT..visual::FACE_SLOT).contains(&quad.slot) {
+            let letter = visual::letters::SET[(quad.slot - visual::LETTER_SLOT) as usize];
+            let advance =
+                visual::letters::run(&letter.to_string()).expect("a letter of the set")[0].advance;
+            let side = w / visual::letters::LETTER_BOX;
+            return [
+                x + w * 0.5 - advance * side * 0.5,
+                y + h * 0.5 - 0.36 * side,
+                advance * side,
+                0.72 * side,
+            ];
+        }
+        if BATTERY_SLOTS.contains(&quad.slot) {
+            return [
+                x + BATTERY_MARK_INSET * w,
+                y + 8.6 / 32.0 * h,
+                (28.6 - 2.2) / 32.0 * w,
+                (23.4 - 8.6) / 32.0 * h,
+            ];
+        }
+        quad.rect
+    }
+
+    fn crosses(a: [f32; 4], b: [f32; 4]) -> bool {
+        a[0] < b[0] + b[2] - 0.01
+            && b[0] < a[0] + a[2] - 0.01
+            && a[1] < b[1] + b[3] - 0.01
+            && b[1] < a[1] + a[3] - 0.01
+    }
+
+    fn holds(outer: [f32; 4], inner: [f32; 4]) -> bool {
+        outer[0] <= inner[0] + 0.01
+            && outer[1] <= inner[1] + 0.01
+            && outer[0] + outer[2] >= inner[0] + inner[2] - 0.01
+            && outer[1] + outer[3] >= inner[1] + inner[3] - 0.01
+    }
+
+    /// Without a battery the corner is empty: not an outline, not a greyed-out
+    /// mark, and not a single letter standing where its figures would.
+    #[test]
+    fn a_machine_with_no_battery_draws_nothing_in_the_corner() {
+        let users = [user("Alex")];
+        let sessions = [session("LineXinBar")];
+        for (width, height) in SHAPES {
+            for figures in [false, true] {
+                let mut bare = view(
+                    &users,
+                    &sessions,
+                    Phase::Choose,
+                    Focus::Prompt,
+                    FOOTER.as_slice(),
+                );
+                // Figures asked for by an account on a machine that has no
+                // battery to write them about.
+                bare.battery_percent = figures;
+                let output = one_display(bare, width, height);
+                assert!(
+                    output
+                        .scene
+                        .quads
+                        .iter()
+                        .all(|quad| !BATTERY_SLOTS.contains(&quad.slot)),
+                    "{width}x{height}: a battery was drawn on a machine with none",
+                );
+                let layout = Layout::new(
+                    Metrics::new(width, height),
+                    &view(
+                        &users,
+                        &sessions,
+                        Phase::Choose,
+                        Focus::Prompt,
+                        FOOTER.as_slice(),
+                    ),
+                );
+                // Marks and letters, which is what the corner is made of: a
+                // display too narrow for the clock has the column's glass
+                // under it, and glass is not the corner's.
+                assert!(
+                    !output
+                        .scene
+                        .quads
+                        .iter()
+                        .filter(|quad| quad.glyph_material())
+                        .any(|quad| crosses(ink_of(quad), layout.battery)),
+                    "{width}x{height}: something was drawn in the battery's corner",
+                );
+            }
+        }
+    }
+
+    /// Each of the six marks is chosen for the charge it stands for, at the edges
+    /// of its range on both sides, and filling outranks the level.
+    #[test]
+    fn the_mark_is_the_one_for_the_charge() {
+        let table = [
+            (0, false, visual::BATTERY_EMPTY_SLOT),
+            (5, false, visual::BATTERY_EMPTY_SLOT),
+            (9, false, visual::BATTERY_EMPTY_SLOT),
+            (10, false, visual::BATTERY_LOW_SLOT),
+            (20, false, visual::BATTERY_LOW_SLOT),
+            (34, false, visual::BATTERY_LOW_SLOT),
+            (35, false, visual::BATTERY_HALF_SLOT),
+            (50, false, visual::BATTERY_HALF_SLOT),
+            (59, false, visual::BATTERY_HALF_SLOT),
+            (60, false, visual::BATTERY_HIGH_SLOT),
+            (75, false, visual::BATTERY_HIGH_SLOT),
+            (84, false, visual::BATTERY_HIGH_SLOT),
+            (85, false, visual::BATTERY_FULL_SLOT),
+            (100, false, visual::BATTERY_FULL_SLOT),
+            // Filling outranks the level at every level.
+            (0, true, visual::BATTERY_CHARGING_SLOT),
+            (40, true, visual::BATTERY_CHARGING_SLOT),
+            (99, true, visual::BATTERY_CHARGING_SLOT),
+        ];
+        let users = [user("Alex")];
+        let sessions = [session("LineXinBar")];
+        for (percent, charging, slot) in table {
+            assert_eq!(
+                battery_slot(charge(percent, charging)),
+                slot,
+                "{percent} per cent, charging {charging}",
+            );
+            // And it is that cell, and only that one, that reaches a frame.
+            let mut one = view(
+                &users,
+                &sessions,
+                Phase::Choose,
+                Focus::Prompt,
+                FOOTER.as_slice(),
+            );
+            one.battery = Some(charge(percent, charging));
+            let output = one_display(one, 1920.0, 1080.0);
+            let drawn: Vec<u32> = output
+                .scene
+                .quads
+                .iter()
+                .map(|quad| quad.slot)
+                .filter(|slot| BATTERY_SLOTS.contains(slot))
+                .collect();
+            assert_eq!(drawn, [slot], "{percent} per cent, charging {charging}");
+        }
+        // Six marks, and six different cells: the table above covers each.
+        let mut seen: Vec<u32> = table.iter().map(|(_, _, slot)| *slot).collect();
+        seen.sort_unstable();
+        seen.dedup();
+        assert_eq!(seen, BATTERY_SLOTS);
+        // Sitting on the mains at full is a full battery and not one forever
+        // filling: the reader says `charging` is false there, and this draws it.
+        assert_eq!(
+            battery_slot(charge(100, false)),
+            visual::BATTERY_FULL_SLOT,
+            "full on the mains",
+        );
+    }
+
+    /// What a redraw is owed for: a change in the mark, or in the figures when
+    /// they are written — and nothing else.
+    #[test]
+    fn only_a_change_in_what_is_drawn_is_a_change() {
+        // Figures off: the per cent is not on the screen, so it is not news
+        // until it crosses into another mark.
+        assert_eq!(
+            battery_drawn(Some(charge(72, false)), false),
+            battery_drawn(Some(charge(71, false)), false),
+        );
+        assert_ne!(
+            battery_drawn(Some(charge(60, false)), false),
+            battery_drawn(Some(charge(59, false)), false),
+        );
+        // Figures on: every per cent is.
+        assert_ne!(
+            battery_drawn(Some(charge(72, false)), true),
+            battery_drawn(Some(charge(71, false)), true),
+        );
+        // A cable in or out is, with figures or without.
+        for figures in [false, true] {
+            assert_ne!(
+                battery_drawn(Some(charge(72, false)), figures),
+                battery_drawn(Some(charge(72, true)), figures),
+            );
+            assert_ne!(
+                battery_drawn(Some(charge(72, false)), figures),
+                battery_drawn(None, figures),
+            );
+        }
+        assert_eq!(battery_drawn(None, true), None);
+    }
+
+    /// Figures are the charge and one sign, a hundred at the most.
+    #[test]
+    fn the_figures_are_the_charge_and_a_per_cent_sign() {
+        for (percent, written) in [
+            (0, "0%"),
+            (5, "5%"),
+            (9, "9%"),
+            (10, "10%"),
+            (99, "99%"),
+            (100, "100%"),
+            // A reading past a hundred is held to it, whatever it was handed.
+            (200, "100%"),
+        ] {
+            assert_eq!(charge_figures(percent), written);
+            assert!(
+                visual::letters::run(written).is_some(),
+                "{written} is not in the alphabet the clock ships",
+            );
+        }
+    }
+
+    /// Figures appear only when the screen is asked for them, and they are a
+    /// run of the clock's own letters, ending on the sign.
+    #[test]
+    fn the_figures_are_written_only_when_asked_for() {
+        let users = [user("Alex")];
+        let sessions = [session("LineXinBar")];
+        let screen = |figures: bool| {
+            let mut one = view(
+                &users,
+                &sessions,
+                Phase::Choose,
+                Focus::Prompt,
+                FOOTER.as_slice(),
+            );
+            one.battery = Some(charge(72, false));
+            one.battery_percent = figures;
+            one_display(one, 1920.0, 1080.0)
+        };
+        let without = battery_quads(&screen(false));
+        assert_eq!(without.len(), 1, "the mark alone");
+        assert_eq!(without[0].slot, visual::BATTERY_HIGH_SLOT);
+
+        let with = battery_quads(&screen(true));
+        let cells: Vec<u32> = with[1..].iter().map(|quad| quad.slot).collect();
+        let expected: Vec<u32> = ['7', '2', '%']
+            .iter()
+            .map(|letter| visual::letters::slot(*letter).expect("in the alphabet"))
+            .collect();
+        assert_eq!(cells, expected, "72% in the clock's letters, left to right");
+        // The mark is the same quad either way: the figures add to it.
+        assert_eq!(with[0].rect, without[0].rect);
+        assert_eq!(with[0].slot, without[0].slot);
+        // In the soft ink of the clock, which is the accent's pale cast, and
+        // never in the white of a mark on a lit tile.
+        let soft = theme::theme().text_soft;
+        for quad in &with {
+            assert_eq!(quad.color[..3], soft.rgb());
+        }
+    }
+
+    /// A charge falling from a hundred to ninety-nine does not slide the mark
+    /// or the end of the figures: they stand against one edge.
+    #[test]
+    fn a_hundred_per_cent_and_ninety_nine_end_on_the_same_edge() {
+        let users = [user("Alex")];
+        let sessions = [session("LineXinBar")];
+        for (width, height) in SHAPES {
+            let screen = |percent: u8| {
+                let mut one = view(
+                    &users,
+                    &sessions,
+                    Phase::Choose,
+                    Focus::Prompt,
+                    FOOTER.as_slice(),
+                );
+                one.battery = Some(charge(percent, false));
+                one.battery_percent = true;
+                battery_quads(&one_display(one, width, height))
+            };
+            let (full, nearly) = (screen(100), screen(99));
+            assert_eq!(full.len(), 5, "1, 0, 0, % and the mark");
+            assert_eq!(nearly.len(), 4, "9, 9, % and the mark");
+            // The mark did not move, and the sign did not.
+            assert_eq!(full[0].rect, nearly[0].rect, "{width}x{height}: the mark");
+            let last = |quads: &[Quad]| quads[quads.len() - 1].rect;
+            for (a, b) in last(&full).iter().zip(last(&nearly)) {
+                assert!((a - b).abs() < 0.01, "{width}x{height}: the sign moved");
+            }
+            // What moves is the front of the run: a figure further left.
+            assert!(full[1].rect[0] < nearly[1].rect[0]);
+            // And they stand clear of the mark's outline by the gap.
+            let outline = full[0].rect[0] + BATTERY_MARK_INSET * full[0].rect[2];
+            let end = ink_of(&full[full.len() - 1]);
+            assert!(
+                end[0] + end[2] <= outline,
+                "{width}x{height}: the sign runs into the mark",
+            );
+        }
+    }
+
+    /// The corner lies wholly inside every display, and collides with nothing a
+    /// screen draws: not the clock, in either form it can be written in, not the
+    /// row of buttons, the column, the session menu or the board.
+    ///
+    /// Asked of rectangles rather than looked at, against everything the same
+    /// frame draws without a battery — marks, letters, writing and what can be
+    /// pressed — and the board's panel where it is up. A pane the corner stands
+    /// *on* is not a collision: a display too narrow for the clock gives the
+    /// whole width to the column's glass, and a mark on glass is where a mark is
+    /// meant to be.
+    #[test]
+    fn the_corner_collides_with_nothing_on_any_display() {
+        let users = [user("Alex")];
+        let sessions = [session("LineXinBar"), session("Plasma")];
+        let board = Board::default();
+        let phases = [
+            Phase::Choose,
+            Phase::Username {
+                input: "al",
+                error: None,
+            },
+            Phase::Authenticating {
+                prompt: "Password",
+                secret: true,
+                input: "hunter2",
+            },
+            Phase::Error("Try again"),
+        ];
+        let mut checked = 0;
+        for (width, height) in SHAPES {
+            for clock in [
+                crate::clock::Clock::TwentyFourHour,
+                crate::clock::Clock::TwelveHour,
+            ] {
+                for phase in phases {
+                    for (raised, menu) in [(false, false), (true, false), (false, true)] {
+                        let make = |battery: Option<Charge>| {
+                            let mut one =
+                                view(&users, &sessions, phase, Focus::Prompt, FOOTER.as_slice());
+                            one.clock = clock;
+                            // A time as wide as either clock writes it.
+                            one.now = Some(crate::clock::Now::at_hour(23, 59));
+                            one.battery = battery;
+                            one.battery_percent = true;
+                            if raised {
+                                one.keyboard = Some(&board);
+                                one.keyboard_interactive = true;
+                                one.keyboard_arrival = 1.0;
+                            }
+                            if menu {
+                                one.session_menu = Some(Menu {
+                                    selected: 1,
+                                    progress: 1.0,
+                                    interactive: true,
+                                });
+                            }
+                            one_display(one, width, height)
+                        };
+                        let bare = make(None);
+                        let output = make(Some(charge(100, true)));
+                        let where_ = format!(
+                            "{width}x{height} {clock:?} {:?} board {raised} menu {menu}",
+                            phase
+                        );
+
+                        // What the battery put on the screen, and only that:
+                        // the rest of the frame is the frame without it.
+                        let mine = battery_quads(&output);
+                        assert_eq!(mine.len(), 5, "{where_}: the mark and 100%");
+                        let ink: Vec<[f32; 4]> = mine.iter().map(ink_of).collect();
+
+                        for rect in &ink {
+                            assert!(
+                                rect[0] >= 0.0
+                                    && rect[1] >= 0.0
+                                    && rect[0] + rect[2] <= width
+                                    && rect[1] + rect[3] <= height,
+                                "{where_}: {rect:?} leaves the display",
+                            );
+                        }
+                        // The mark's whole cell is inside too: its shadow is
+                        // drawn out to the edge of the quad.
+                        let cell = mine[0].rect;
+                        assert!(
+                            cell[0] >= 0.0 && cell[1] >= 0.0 && cell[0] + cell[2] <= width,
+                            "{where_}: the mark's cell leaves the display",
+                        );
+
+                        let mut others: Vec<[f32; 4]> = bare
+                            .scene
+                            .quads
+                            .iter()
+                            .filter(|quad| quad.glyph_material())
+                            .map(ink_of)
+                            .collect();
+                        others.extend(bare.scene.texts.iter().map(|text| text.rect));
+                        others.extend(bare.hits.iter().map(|hit| hit.rect));
+                        if raised {
+                            others.push(keyboard_panel_rect(width, height));
+                        }
+                        let layout = Layout::new(
+                            Metrics::new(width, height),
+                            &view(&users, &sessions, phase, Focus::Prompt, FOOTER.as_slice()),
+                        );
+                        if !menu {
+                            others.push(layout.legend_row);
+                        }
+                        for other in others {
+                            // Stood on rather than collided with.
+                            if ink.iter().any(|mine| holds(other, *mine)) {
+                                continue;
+                            }
+                            for mine in &ink {
+                                assert!(
+                                    !crosses(*mine, other),
+                                    "{where_}: {mine:?} is drawn over {other:?}",
+                                );
+                            }
+                            // The whole cell as well, against what is not
+                            // itself a pane.
+                            assert!(
+                                !crosses(cell, other) || holds(other, cell),
+                                "{where_}: the mark's cell {cell:?} reaches {other:?}",
+                            );
+                        }
+                        checked += 1;
+                    }
+                }
+            }
+        }
+        assert!(checked > 100, "{checked} screens were checked");
+    }
+
+    /// The mark's size follows the display's height and nothing else, and a
+    /// handheld's is not smaller than the shell draws it there.
+    ///
+    /// The shell's corner at 1280 by 800 draws this at three quarters of its
+    /// reference size, which is the size at which the wall of the shell is still
+    /// two pixels across: below that the water has no flat face and the mark is
+    /// a smudge. A display standing on its side keeps the size its height gives
+    /// it rather than shrinking to the width, as the legend does.
+    #[test]
+    fn the_mark_is_the_size_the_shell_draws_it_at() {
+        let users = [user("Alex")];
+        let sessions = [session("LineXinBar")];
+        for (width, height) in SHAPES {
+            let one = view(
+                &users,
+                &sessions,
+                Phase::Choose,
+                Focus::Prompt,
+                FOOTER.as_slice(),
+            );
+            let layout = Layout::new(Metrics::new(width, height), &one);
+            let scale = (height / 1080.0).clamp(0.6, 2.5);
+            assert!(
+                (layout.battery[2] - BATTERY_MARK * scale).abs() < 1e-3,
+                "{width}x{height}: a cell of {}",
+                layout.battery[2],
+            );
+            assert_eq!(layout.battery[2], layout.battery[3], "a square cell");
+            // Hugging the corner by the shell's own inset, centred on its line.
+            assert!(
+                (width - (layout.battery[0] + layout.battery[2]) - CORNER_INSET * scale).abs()
+                    < 1e-3
+            );
+            assert!(
+                (layout.battery[1] + layout.battery[3] * 0.5
+                    - (CORNER_TOP + CORNER_CLOCK * CORNER_MARK_LINE) * scale)
+                    .abs()
+                    < 1e-3
+            );
+            // The wall: 2.4 units of the 32, and the bevel the shader gives the
+            // mark is 0.075 of the cell. The mark is never so small that the
+            // wall is thinner than the shell's own on the smallest display a
+            // console comes on (1280x800: 29.6 pixels of cell).
+            let deck = BATTERY_MARK * (800.0 / 1080.0);
+            if height >= 800.0 {
+                assert!(
+                    layout.battery[2] >= deck - 1e-3,
+                    "{width}x{height}: a cell smaller than a handheld's",
+                );
+            }
+            assert!(layout.battery[2] * 2.4 / 32.0 >= 1.7, "a wall under 1.7px");
+        }
+        // Standing on its side it is the size its height gives it, which is what
+        // it is at the same height lying down.
+        let one = view(
+            &users,
+            &sessions,
+            Phase::Choose,
+            Focus::Prompt,
+            FOOTER.as_slice(),
+        );
+        let tall = Layout::new(Metrics::new(1080.0, 1920.0), &one);
+        let wide = Layout::new(Metrics::new(3413.0, 1920.0), &one);
+        assert_eq!(tall.battery[2], wide.battery[2]);
+        assert_eq!(tall.figures[2], wide.figures[2]);
+    }
+
+    /// The corner fades with the screen it stands on, mark and figures alike,
+    /// and the strength is in `fade` alone.
+    #[test]
+    fn the_corner_fades_with_the_screen_and_in_fade_alone() {
+        let users = [user("Alex")];
+        let sessions = [session("LineXinBar")];
+        let screen = |arrival: f32, departure: f32| {
+            let mut one = view(
+                &users,
+                &sessions,
+                Phase::Choose,
+                Focus::Prompt,
+                FOOTER.as_slice(),
+            );
+            one.battery = Some(charge(72, false));
+            one.battery_percent = true;
+            one.arrival = arrival;
+            one.departure = departure;
+            battery_quads(&one_display(one, 1600.0, 900.0))
+        };
+        let here = screen(1.0, 0.0);
+        assert_eq!(here.len(), 4, "the mark and 72%");
+        for (arrival, departure) in [(0.35, 0.0), (1.0, 0.65), (0.0, 0.0), (1.0, 1.0)] {
+            let going = screen(arrival, departure);
+            assert_eq!(here.len(), going.len(), "the same set of quads");
+            for (whole, faded) in here.iter().zip(&going) {
+                assert_eq!(whole.color[3], 1.0);
+                assert_eq!(faded.color[3], 1.0, "strength must not live in the colour");
+                assert!(
+                    faded.fade < whole.fade * 0.5 + 1e-6,
+                    "cell {} is {} of a screen {arrival} arrived and {departure} gone",
+                    whole.slot,
+                    faded.fade,
+                );
+            }
+        }
+        // Both directions: nothing at all of it is left at either end.
+        for quad in screen(0.0, 0.0).iter().chain(&screen(1.0, 1.0)) {
+            assert_eq!(quad.fade, 0.0);
+        }
+    }
+
+    /// Every display of several has the same corner on it, in its own pixels.
+    ///
+    /// A charge on one screen and none on the one beside it would be two answers
+    /// to one question.
+    #[test]
+    fn every_display_draws_the_battery_in_its_own_corner() {
+        let users = [user("Alex")];
+        let sessions = [session("LineXinBar")];
+        let mut one = view(
+            &users,
+            &sessions,
+            Phase::Choose,
+            Focus::Prompt,
+            FOOTER.as_slice(),
+        );
+        one.battery = Some(charge(72, false));
+        one.battery_percent = true;
+        let displays = [
+            Display {
+                rect: [0.0, 0.0, 1920.0, 1080.0],
+            },
+            Display {
+                rect: [1920.0, 0.0, 1280.0, 1024.0],
+            },
+            Display {
+                rect: [3200.0, 0.0, 1080.0, 1920.0],
+            },
+        ];
+        let output = build(one, &displays);
+        for display in displays {
+            let [x, y, w, h] = display.rect;
+            let on_it: Vec<Quad> = output
+                .scene
+                .quads
+                .iter()
+                .filter(|quad| quad.display == display.rect)
+                .copied()
+                .collect();
+            let mine = battery_quads_in(&on_it);
+            assert_eq!(mine.len(), 1 + 3, "{display:?}: the mark and 72%");
+            let mark = mine
+                .iter()
+                .find(|quad| BATTERY_SLOTS.contains(&quad.slot))
+                .expect("the mark");
+            assert!(holds([x, y, w, h], mark.rect), "{display:?}");
+            // In the top-right corner of its own display.
+            assert!(mark.rect[0] > x + w * 0.8 && mark.rect[1] < y + h * 0.1);
         }
     }
 }

@@ -187,6 +187,26 @@ pub struct Look {
     /// read as somebody having turned it off. See [`Look::button_hints`].
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub button_hints: Option<bool>,
+    /// Whether that account's shell writes the battery's charge out in figures
+    /// beside its mark — Settings > Power > Battery percentage,
+    /// `battery-percent` in `shell.toml`, `true` or `false`.
+    ///
+    /// Carried for the clock's reason, and it is the account's choice rather
+    /// than the machine's: the power settings the greeter shares with the
+    /// session are in `/etc/lxb/power.toml` and have one answer for everybody,
+    /// and this is a statement about how one person likes a status mark read.
+    /// The mark itself is the machine's, drawn from the kernel's own list of
+    /// supplies — see [`crate::battery`] — so the only thing a look can add to
+    /// it is whether it is written out, and that is the one thing a login
+    /// screen cannot work out for itself. It follows the account the selection
+    /// stands on, as the clock does.
+    ///
+    /// A look that says nothing leaves the figures off, which is what the shell
+    /// does with a silent file: it is off unless somebody asked, and every look
+    /// written before the row existed must not start printing a number on
+    /// machines that never chose one. See [`Look::battery_percent`].
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub battery_percent: Option<bool>,
     /// Whether the controller is the control that account last reached for,
     /// rather than a keyboard.
     ///
@@ -337,6 +357,13 @@ impl Look {
     /// default is argued.
     pub fn button_hints(&self) -> bool {
         self.button_hints.unwrap_or(true)
+    }
+
+    /// Whether this account's screen writes the battery's charge in figures. A
+    /// look that says nothing leaves them off — see [`Look::battery_percent`]
+    /// the field, where the default is argued.
+    pub fn battery_percent(&self) -> bool {
+        self.battery_percent.unwrap_or(false)
     }
 
     /// Whether this account's wallpaper carries its sparkles. A look that says
@@ -1356,6 +1383,89 @@ Music = "modified-newest-first"
             !silent.contains("theme-particles"),
             "a look that says nothing writes nothing: {silent}"
         );
+        fs::remove_dir_all(home).unwrap();
+    }
+
+    /// The shell's Battery percentage survives the same round trip, and a look
+    /// that says nothing — every look published before the row existed — leaves
+    /// the figures off, which is what the shell does with that silence.
+    ///
+    /// The silent half is the one that matters, and in the opposite direction
+    /// from the legend's: reading a missing key as "on" would put a number in
+    /// the corner of every login screen on every machine that has a battery,
+    /// none of whose owners asked for one.
+    #[test]
+    fn the_battery_percentage_is_carried_and_silence_leaves_it_off() {
+        let home = home_with("battery-percent = true\n", None);
+        let look = Look::read(&home, None);
+        assert!(look.battery_percent(), "the file says the figures are on");
+
+        let published = toml::to_string(&look).expect("a look is written as TOML");
+        assert!(published.contains("battery-percent = true"), "{published}");
+        let back: Look = toml::from_str(&published).expect("and read back");
+        assert!(back.battery_percent());
+        fs::remove_dir_all(home).unwrap();
+
+        let off = home_with("battery-percent = false\n", None);
+        let look = Look::read(&off, None);
+        assert_eq!(look.battery_percent, Some(false), "a choice, not silence");
+        assert!(!look.battery_percent());
+        let published = toml::to_string(&look).expect("a look is written as TOML");
+        assert!(published.contains("battery-percent = false"), "{published}");
+        fs::remove_dir_all(off).unwrap();
+
+        assert!(
+            !Look::default().battery_percent(),
+            "a look with nothing in it writes no figures"
+        );
+        let silent = toml::to_string(&Look::default()).expect("a look is written as TOML");
+        assert!(
+            !silent.contains("battery-percent"),
+            "a look that says nothing writes nothing: {silent}"
+        );
+        // And an account's file that is about everything else is silent too.
+        let other = home_with(SHELL, None);
+        assert!(!Look::read(&other, None).battery_percent());
+        fs::remove_dir_all(other).unwrap();
+    }
+
+    /// The figures are one account's answer, so they travel through the file
+    /// the greeter actually reads — published by the account, believed for the
+    /// account that owns it — and a copy that says nothing about them is not
+    /// somebody else's choice carried over.
+    #[test]
+    fn the_battery_percentage_reaches_the_published_copy_and_follows_the_account() {
+        let root = scratch("published-battery");
+        // SAFETY: `getuid` cannot fail and touches no memory this owns.
+        let mine = unsafe { libc::getuid() };
+
+        // Two accounts, one after the other out of the same settings file: it
+        // is what each of them publishes that is asked about, not what
+        // happens to be on disk.
+        let home = home_with("accent = \"Red\"\nbattery-percent = true\n", None);
+        let settings = home.join(".config/lxb/shell.toml");
+        publish_in(&root, "alex", &Look::read(&home, None)).unwrap();
+        fs::write(&settings, "accent = \"Red\"\n").unwrap();
+        publish_in(&root, "sam", &Look::read(&home, None)).unwrap();
+
+        assert!(published_in(&root, "alex", mine).unwrap().battery_percent());
+        assert!(
+            !published_in(&root, "sam", mine).unwrap().battery_percent(),
+            "one account's figures are not another's"
+        );
+
+        // Published again with the row turned back off: the copy is the whole
+        // state every time, so the figures leave it rather than lingering.
+        fs::write(&settings, "accent = \"Red\"\nbattery-percent = false\n").unwrap();
+        publish_in(&root, "alex", &Look::read(&home, None)).unwrap();
+        assert!(!published_in(&root, "alex", mine).unwrap().battery_percent());
+
+        // A key that is not a truth value is not a look, and is not believed
+        // as one.
+        fs::write(root.join("alex.toml"), "battery-percent = \"yes\"\n").unwrap();
+        assert_eq!(published_in(&root, "alex", mine), None);
+
+        fs::remove_dir_all(root).unwrap();
         fs::remove_dir_all(home).unwrap();
     }
 

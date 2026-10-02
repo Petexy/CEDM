@@ -50,15 +50,16 @@ own blending is correct.
 
 ## The marks
 
-The marks are LineXinBar's, in both senses. Ten of the thirteen are the shell's
-own files: the four arrow caps, the two controller hints and the keyboard's
-close key are byte-identical, and the power symbol, the restart cycle and the
-session badge's screen are its `shutdown.svg`, `refresh.svg` and
-`setting-display.svg` unchanged from `<svg` on, under names that say what they
-do here. The greeter and the shell it hands over to must not put two different
-power symbols in front of the same user four seconds apart.
+The marks are LineXinBar's, in both senses. Twenty-one of the twenty-four are
+the shell's own drawings, unchanged from `<svg` on under a header of this
+repository's: the four arrow caps, the five pad buttons, the two key caps, the
+keyboard's close key, the six states of the battery, and — under names that say
+what they do here — the power symbol, the restart cycle and the session badge's
+screen, which are its `shutdown.svg`, `refresh.svg` and `setting-display.svg`.
+The greeter and the shell it hands over to must not put two different power
+symbols in front of the same user four seconds apart.
 
-**None of the thirteen is a picture of a mark.** Each file is a *silhouette* —
+**None of the twenty-four is a picture of a mark.** Each file is a *silhouette* —
 the body, and the openings taken out of it by one mask, in pure white with no
 rim, no gradient, no sheen and no shadow anywhere in it — and what ships in the
 atlas is a measurement of that outline: how far every pixel of the cell is from
@@ -100,7 +101,7 @@ everything else, which is the part that stopped being a decision per glyph.
 
 ### The guard over the set
 
-`lxb-desktop`'s own guard is ported with the marks, and it is what lets the ten
+`lxb-desktop`'s own guard is ported with the marks, and it is what lets the
 shared drawings be copied across without being looked at each time. Every mark
 must be a shape and nothing else — pure white wherever it paints, since a rim or
 a gradient left in the file would be measured as though it were geometry. Its
@@ -149,7 +150,8 @@ is the seam this whole project exists to avoid.
 
 So every character either clock can contain — the ten digits, the colon, and
 the `A`, `M` and `P` of an afternoon, with a space that moves the pen and draws
-nothing — is cut out of the bundled bold Roboto once at start, measured into a
+nothing, and the sign for a per cent, which only [the battery](#the-battery)
+writes — is cut out of the bundled bold Roboto once at start, measured into a
 signed distance field, and drawn as one quad per letter through the shell's own
 `glyph_material`. A time holding anything outside that alphabet is drawn as no
 clock at all, which is why the tests walk both clocks through all twenty-four
@@ -163,6 +165,77 @@ ten languages, in Latin, Cyrillic, Devanagari and Han — a cell per codepoint i
 not a text renderer, and Chinese alone would want a thousand of them. It stays a
 text run in the same tint, which is what keeps the two lines one object: the
 colour carries the accent, the material carries the hour.
+
+## The battery
+
+The top-right corner of every display carries the shell's battery mark, on a
+machine that has a battery, and nothing at all on one that has not: not an
+outline and not a greyed-out mark. With the clock and the button row it is the
+third thing this screen writes on the wallpaper, and it is written in the same
+material and the same ink.
+
+**It is where the shell puts its own, at the size the shell draws it.**
+LineXinBar's start screen carries its battery in this corner a few seconds
+after this screen is gone, and a mark that moved or changed size across the
+hand-over would read as a different machine's. So the square cell it is drawn
+in is the shell's: 40 pixels across on a 1080-line display, standing 48 from
+the right edge and centred on the line the shell's clock is written on. The scale is
+the button row's, the display's height over 1080 and never below 0.6, and not
+this greeter's own for the reason the row gives. At 1280×800 the cell is about
+30 pixels and at 4K it is twice what it is at 1080. The shell's drawings have a
+wall 2.4 units of thirty-two thick and the shader gives a mark a bevel of
+0.075 of its size, so a mark drawn much smaller stops being a battery and becomes
+a smudge; that is what the floor is for.
+
+**Six drawings, and not one with a level drawn into it**: empty, low, half, high,
+full, and a bolt for a battery that is filling. They are the shell's own,
+measured like every other mark here, and a state is a different outline rather
+than a different fill. They change over at 10, 35, 60 and 85 per cent, which are
+the shell's edges, and with no hysteresis: a radio's number wanders a point or
+two between readings, and a battery walks one way, slowly — and with the figures
+beside it, a guarded edge would be a drawing that disagreed with the digits next
+to it, which is worse than the flicker the guard is there to prevent. Filling
+outranks the level, and the bolt has no bar in it, because a bolt small enough to
+stand beside a bar would be thinner than its own bevel at the size the corner is
+drawn; whoever wants both turns the figures on. A battery sitting on the mains at
+full is not filling and is drawn full.
+
+**The figures stand to the left of the mark**, in the clock's own letters and
+the same pale ink, as `72%` and at the most `100%`, right-aligned against the
+mark's outline. A charge falling from 100 to 99 therefore changes the front of
+the run and moves nothing: the mark stays where it is. The shell puts them above
+its mark, and only because its clock shares that line; this screen's clock is
+elsewhere, so they have a line of their own. They are a little larger than the
+shell's, which calls its own as small as the water goes — the stems of the bold
+face are a seventh of its size across, and a bead needs two bevels' width to get
+a flat face at all — because there is room beside the mark that there is not
+over it. The sign for a per cent is the one character the clock's alphabet
+gained for them.
+
+**Whose figures they are** is the account the selection stands on. The mark is
+the machine's and is the same whoever is selected; the figures are Settings >
+Power > Battery percentage, which is each account's own, and they appear and
+disappear as the carousel moves from one account to another, off for an account
+that has not asked and for the route to one that was not listed. How that
+reaches a screen that opens no home directory is under
+[the battery](architecture.md#the-battery) in the architecture notes.
+
+**Every display draws it, and it is clear of everything on any of them.** The
+greeter composes a whole login screen per display, and a charge on one and none
+on the one beside it would be two answers to one question. The corner is a fixed
+place in the display, so what has to be asked is whether anything else comes
+there: the hour beside the column on a landscape display and over it on one
+standing on its side, the button row at the bottom, the column, the session menu
+and the board. The tests lay the screen out at 16:10, 16:9, 4:3, 21:9, on its
+side, at a handheld's 1280×800, at 4K and on displays too narrow to give the
+hour a place, with both clocks, with the board up and with the session menu
+open, and ask that nothing the corner draws crosses anything else. On a display
+too narrow for the clock the column's glass is the whole display, and the mark
+stands on it in a corner that has nothing else in it.
+
+It rises with the rest of the screen and leaves with it, fading the way every
+other mark here does, so the last frame this greeter draws is still a bare
+wallpaper frame.
 
 ## Avatars
 
@@ -189,7 +262,7 @@ instead is how an avatar comes out looking photographed through a screen door.
 Only PNG is decoded — the daemon does not transcode what it copies, so an avatar
 set from a JPEG stays a JPEG, and that account keeps its initial rather than the
 greeter growing a second image decoder to run over a file before anyone has
-logged in. Cells are bounded at seventeen accounts and the read at 8 MB, because
+logged in. Cells are bounded at nineteen accounts and the read at 8 MB, because
 everything on this side of a login is.
 
 ## The carousel
@@ -316,6 +389,10 @@ stood empty. What counts as a small screen is asked the same way, of the long
 side and the short one, so the turned canvas at a scale of exactly one is not
 drawn with a small screen's fixed sizes.
 
+The battery's corner stays the top-right of the display as it is turned, at the
+size the display's height gives it and not shrunk to fit, and the hour stacked
+above the column clears it, with a twelve-hour clock as well as a twenty-four.
+
 The on-screen keyboard is the width of such a display, so while it is up there
 is no corner left beside it and the row gives up, as it does on any display the
 board leaves no room on. A display wider than it is tall is laid out exactly as
@@ -362,8 +439,9 @@ writes its own legend opposite the thing the screen is about, and the login
 screen and the shell's start screen are either side of a hand-over that is
 otherwise seamless; a hand that has learnt where to look for this row must not
 have to learn it again. It is written in the clock's ink — the accent's own pale
-cast — because the clock and the row are the only two things this screen puts on
-the wallpaper.
+cast — because the clock and the row are the only things this screen writes on
+the wallpaper, bar [the battery](#the-battery) in the opposite corner, which is
+written in the same ink for the same reason.
 
 **The button is drawn rather than named.** The same act is South on a pad and
 Enter on a keyboard, and no wording covers both without naming neither — "press
@@ -477,3 +555,28 @@ The accent in them is the fallback palette, which is what an account that has
 published nothing is drawn in — so the pictures state nothing about the machine
 they were taken on. `--shot` still needs a window to obtain a GPU surface, so it
 is a development aid rather than a headless renderer.
+
+**The battery is the one thing in them that is the machine's own**, and a demo
+cannot invent it honestly. Taken on a laptop, a picture shows that laptop's
+battery at whatever it holds that minute. Two hidden options say what it should
+show instead. `--debug-power-supply DIR` reads the supplies from a directory laid
+out like `/sys/class/power_supply` — the shell has an option of the same name —
+and `--debug-battery-percent NAME[,NAME]` says that those accounts' published
+looks have `battery-percent = true`, since `--demo`'s accounts are nobody's and
+have published nothing. It adds to what an account published and takes nothing
+away.
+
+```sh
+mkdir -p /tmp/supplies/BAT0
+printf 'Battery\n'     > /tmp/supplies/BAT0/type
+printf '72\n'          > /tmp/supplies/BAT0/capacity
+printf 'Discharging\n' > /tmp/supplies/BAT0/status
+cedm --demo --shot /tmp/cedm.png --size 1280x800 \
+     --debug-power-supply /tmp/supplies --debug-battery-percent alex
+```
+
+A directory with no battery in it shows none, which is how a picture is taken
+on a machine that has one without it showing. Both options are listened to only
+in a preview or a screenshot, so the login screen a machine signs in at cannot
+be made to show a battery it does not have, and a picture made this way is a
+picture of a directory somebody wrote and has to be called one.

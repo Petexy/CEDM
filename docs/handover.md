@@ -173,6 +173,7 @@ LineXinBar settings and writes the parts a login screen has a use for to
 ```toml
 accent = "Red"
 button-hints = true
+battery-percent = true
 controller-in-hand = true
 sound-card = "PCH"
 sound-gain = 0.027

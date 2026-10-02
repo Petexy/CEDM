@@ -72,6 +72,10 @@ cargo run -- --list-sessions
   whatever PAM is asking, and what the machine can be asked to do instead.
   Every screen puts its controls in the same rectangle, so a change of screen
   is a change of contents rather than a rearrangement.
+- **The battery, where there is one.** In the top-right corner of every display,
+  the shell's own mark in the clock's water, and the charge in figures beside it
+  when the account selected has Battery percentage on. A machine with no battery
+  has nothing there. See [the battery](docs/design.md#the-battery).
 - **A whole login screen on every display.** Two monitors are two screens, each
   with its own wallpaper, its own column at its own scale, its own clock. Both
   are the same PAM conversation, so a profile chosen on one is the profile
@@ -208,7 +212,7 @@ then whichever of six files this distribution keeps the locale in. See
 
 | | |
 |---|---|
-| [`docs/design.md`](docs/design.md) | What is on the screen and why: the glass, the marks as beads of water, the clock, the avatars, the session menu, the motion, the button legend and the sounds |
+| [`docs/design.md`](docs/design.md) | What is on the screen and why: the glass, the marks as beads of water, the clock, the battery, the avatars, the session menu, the motion, the button legend and the sounds |
 | [`docs/architecture.md`](docs/architecture.md) | The layers, the greetd conversation, what a refusal says, how sessions are launched, the input contract, and the boundary around per-account data |
 | [`docs/handover.md`](docs/handover.md) | The two records that make a login continuous, the three intervals that used to be black, and what an account publishes about itself |
 | [`docs/localization.md`](docs/localization.md) | The ten languages, what is deliberately not translated, the clock, and how to add one |

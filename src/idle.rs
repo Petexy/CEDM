@@ -303,9 +303,13 @@ fn time_asleep() -> Duration {
 /// and no charger is plugged in. Read out of the kernel's own list of power
 /// supplies, which a greeter can read like anybody.
 pub fn on_battery() -> bool {
-    on_battery_in(Path::new("/sys/class/power_supply"))
+    on_battery_in(Path::new(crate::battery::SUPPLIES))
 }
 
+/// Which supplies are the machine's batteries is [`crate::battery`]'s to say,
+/// and the same answer the mark in the corner is drawn from: a login screen
+/// that waited as if it were on a battery it did not show, or drew one it was
+/// not waiting for, would be about two different machines.
 fn on_battery_in(directory: &Path) -> bool {
     let Ok(entries) = std::fs::read_dir(directory) else {
         return false;
@@ -313,19 +317,19 @@ fn on_battery_in(directory: &Path) -> bool {
     let mut battery = false;
     for entry in entries.flatten() {
         let path = entry.path();
-        let read = |name: &str| {
-            std::fs::read_to_string(path.join(name))
-                .map(|text| text.trim().to_string())
-                .unwrap_or_default()
-        };
-        // A mouse's or a controller's battery is its own, not the machine's.
-        if read("scope") == "Device" {
+        if crate::battery::is_system(&path) {
+            battery = true;
             continue;
         }
-        match read("type").as_str() {
-            "Mains" | "USB" if read("online") == "1" => return false,
-            "Battery" if read("present") != "0" => battery = true,
-            _ => {}
+        let read = |name: &str| crate::battery::attribute(&path, name);
+        // A mouse's or a controller's charger is its own, not the machine's.
+        if read("scope").as_deref() == Some("Device") {
+            continue;
+        }
+        if matches!(read("type").as_deref(), Some("Mains" | "USB"))
+            && read("online").as_deref() == Some("1")
+        {
+            return false;
         }
     }
     battery

@@ -8,8 +8,8 @@
 //!
 //! This is `lxb-desktop`'s glyph language, and it is here for the reason
 //! everything else in this program is shaped the way it is: the shell hands over
-//! to this login screen and back again in a few seconds, and ten of the thirteen
-//! drawings in `assets/glyphs` are the shell's own files. A mark painted flat
+//! to this login screen and back again in a few seconds, and twenty-one of the
+//! twenty-four drawings in `assets/glyphs` are the shell's own files. A mark painted flat
 //! beside the same mark made of water is the seam this project exists to avoid.
 //!
 //! # Making one
@@ -40,7 +40,7 @@
 /// The marker a drawing carries in its header comment to say it is a shape.
 ///
 /// `lxb`, and not this crate's own prefix, because it is the shell's language
-/// and the same string in the same place in the same files: ten of these
+/// and the same string in the same place in the same files: twenty-one of these
 /// drawings are `lxb-desktop`'s, copied whole, and a marker that differed
 /// between the two repositories would have to be edited on the way across.
 pub const SHAPE_MARK: &str = "lxb:shape";

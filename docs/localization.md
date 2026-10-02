@@ -188,9 +188,11 @@ AM and PM are the same two marks in every language here, so they are not in
 `Strings`. They are the reason the clock's alphabet has letters in it at all:
 `crate::visual::letters::SET` went from eleven characters to fifteen — the ten
 digits, the colon, a space that moves the pen and draws nothing, and the `A`,
-`M` and `P`. A time holding anything outside that set is drawn as no clock,
-which is why `every_clock_is_written_out_of_the_alphabet_the_greeter_ships`
-walks both clocks through all twenty-four hours, and why
+`M` and `P`; the battery's figures later added a sixteenth, the sign for a per
+cent, which no time contains. A time holding anything outside that set is drawn
+as no clock, which is why
+`every_clock_is_written_out_of_the_alphabet_the_greeter_ships` walks both clocks
+through all twenty-four hours, and why
 `the_widest_time_either_clock_writes_fits_beside_the_column` measures the
 longest of them against the room the layout gives it at every size.
 

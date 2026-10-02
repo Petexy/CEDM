@@ -13,13 +13,18 @@
 //! shaders.wgsl, which is the shell's own and shades a bead of water out of the
 //! field.
 //!
-//! **Fifteen characters, and no more.** `crate::clock::Now::time` is `20:38` or
+//! **Sixteen characters, and no more.** `crate::clock::Now::time` is `20:38` or
 //! `8:38 PM` according to the account's own setting, so the whole alphabet of
 //! it is the ten digits, a colon, a space and the three letters AM and PM are
 //! written with. The last four went in with the twelve-hour clock, on the
 //! argument the shell added the same three on: what they write is the second
 //! half of the *time itself*, and two marks of two letters each is not an
 //! alphabet — nothing else in this greeter may be spelled out of them.
+//!
+//! The sixteenth is the sign for a per cent, and it is here for the same
+//! reason the shell has it: the battery's charge written out beside its mark is
+//! the second place this material writes, and it is figures and that one sign.
+//! `crate::ui`'s `charge_figures` is the whole of what is written with it.
 //!
 //! The *date* under the clock cannot follow and is not meant to: it is words,
 //! in ten languages, in Latin, Cyrillic, Devanagari and Han — a cell per
@@ -69,10 +74,11 @@ const ADVANCE_SIZE: f32 = 1000.0;
 /// Every character the clock is *cut* from, in the cell each is measured into.
 ///
 /// The order is the order of [`super::LETTER_SLOT`]: the ten digits by value,
-/// then the colon, then the three letters of AM and PM. [`SPACE`] is in the
-/// clock and not in here, because it has an advance and nothing to draw.
-pub const SET: [char; 14] = [
-    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':', 'A', 'M', 'P',
+/// then the colon, then the three letters of AM and PM, then the sign for a per
+/// cent. [`SPACE`] is in the clock and not in here, because it has an advance
+/// and nothing to draw.
+pub const SET: [char; 15] = [
+    '0', '1', '2', '3', '4', '5', '6', '7', '8', '9', ':', 'A', 'M', 'P', '%',
 ];
 
 /// The one character of the clock with no cell of its own: it separates the
@@ -192,11 +198,11 @@ fn shaped(
 /// write at [`slot`]. Colour is left white throughout: nothing samples it, and
 /// white is what a multiply expects if anything ever does.
 ///
-/// Fourteen exact distance transforms over a 1024-square grid, which is the
+/// Fifteen exact distance transforms over a 1024-square grid, which is the
 /// whole cost of this file and the reason they are taken on threads rather than
 /// one after another while the login screen has nothing on it yet. In chunks
 /// rather than all at once, because each transform holds three grids of its
-/// own, and fourteen of those at the same time is well over a hundred megabytes
+/// own, and fifteen of those at the same time is well over a hundred megabytes
 /// for a login screen to be carrying while it draws its first frame.
 pub fn fields() -> Vec<(u32, Vec<u8>)> {
     let mut fonts = bold_face();
@@ -258,7 +264,7 @@ pub fn fields() -> Vec<(u32, Vec<u8>)> {
     }
 
     // And the transforms in parallel, because they are the whole cost and they
-    // are eleven separate problems. As many at a time as the machine has cores
+    // are fifteen separate problems. As many at a time as the machine has cores
     // and no more: one core does them one after another, which is what it would
     // have done anyway.
     let at_once = std::thread::available_parallelism()
