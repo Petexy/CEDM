@@ -1085,14 +1085,50 @@ mod tests {
         assert_eq!(layout_key("(qwertz)"), None);
     }
 
+    /// Put an environment variable back the way it was found.
+    ///
+    /// # Safety
+    ///
+    /// Only from a test holding [`alone`], and only for a variable nothing
+    /// else in this binary reads — see the note on the one caller.
+    unsafe fn put_back(name: &str, was: Option<std::ffi::OsString>) {
+        // SAFETY: the caller's guard is what makes this the only thread
+        // touching the environment.
+        unsafe {
+            match was {
+                Some(was) => std::env::set_var(name, was),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+
     /// The environment libxkbcommon itself honours comes before the system's
     /// own configuration — under LineXinBar that variable carries the layout
     /// chosen in Settings, so the login screen and the session agree.
+    ///
+    /// ## What is put back, and what the lock is and is not
+    ///
+    /// The environment belongs to the whole process and `cargo test` runs every
+    /// test in this binary on a thread of it, so [`LOCK`] is **not** what makes
+    /// this safe: it keeps this module's tests apart from each other and knows
+    /// nothing about the rest of the binary. What makes it safe is that
+    /// [`system_layout`] is the only reader of `XKB_DEFAULT_LAYOUT` and
+    /// `XKB_DEFAULT_VARIANT` anywhere in this program, and this is the only
+    /// test that calls it. **A second reader anywhere would need a guard the
+    /// whole binary takes, not this module's.**
+    ///
+    /// Both variables are put back the way they were found rather than taken
+    /// away. A test that leaves them unset has changed the process every test
+    /// after it runs in — on a machine where the session really does export a
+    /// layout, it has thrown that answer away — and a test that quietly changes
+    /// what comes after it is the shape of fault that is hardest to find later.
     #[test]
     fn the_environment_is_asked_before_the_system_configuration() {
         let _held = alone();
-        // SAFETY: the module lock is held, so nothing else in this binary is
-        // reading the environment while it is changed and put back.
+        let was_layout = std::env::var_os("XKB_DEFAULT_LAYOUT");
+        let was_variant = std::env::var_os("XKB_DEFAULT_VARIANT");
+        // SAFETY: the module lock is held, and nothing outside this test reads
+        // these two variables. See the note above.
         unsafe {
             std::env::set_var("XKB_DEFAULT_LAYOUT", "pl");
             std::env::set_var("XKB_DEFAULT_VARIANT", "qwertz");
@@ -1107,8 +1143,10 @@ mod tests {
         let fallen_back = system_layout();
         assert_ne!(fallen_back.0, "  ");
         assert!(!fallen_back.0.is_empty());
+        // SAFETY: as above, and still under the same guard.
         unsafe {
-            std::env::remove_var("XKB_DEFAULT_LAYOUT");
+            put_back("XKB_DEFAULT_LAYOUT", was_layout);
+            put_back("XKB_DEFAULT_VARIANT", was_variant);
         }
     }
 }
